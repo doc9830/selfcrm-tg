@@ -129,6 +129,18 @@ function inList(path, list) {
   return list.some((item) => (item.endsWith('/') ? path.startsWith(item) : path === item))
 }
 
+// Является ли `from` предком `to` — проверка направления диапазона (см. main()).
+function isAncestor(dir, from, to) {
+  try {
+    execFileSync('git', ['-C', dir, 'merge-base', '--is-ancestor', from, to], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 function changedFiles(dir, from, to) {
   const out = git(['-C', dir, 'diff', '--name-status', '--no-renames', `${from}..${to}`])
   return out
@@ -304,6 +316,18 @@ async function main() {
   const head = git(['-C', args.upstream, 'rev-parse', 'HEAD']).trim()
   // База проверяется до сравнения файлов: иначе «неизвестная ревизия» всплыла бы в середине плана.
   git(['-C', args.upstream, 'cat-file', '-e', `${args.from}^{commit}`])
+
+  // Защита от переноса «назад»: если база не предок целевого коммита (например, запуск с тегом
+  // старой версии или после переписывания истории upstream), диапазон обратный — такой перенос
+  // откатил бы файлы. Здесь лучше остановиться и попросить явный --from.
+  if (!isAncestor(args.upstream, args.from, head)) {
+    console.error(
+      `Коммит ${args.from.slice(0, 10)} не является предком ${head.slice(0, 10)}: перенос откатил бы файлы. ` +
+        'Проверьте .sync-state.json или задайте --from явно.',
+    )
+    process.exitCode = 1
+    return
+  }
 
   const entries = collectEntries(args, args.upstream, head)
   const counts = {

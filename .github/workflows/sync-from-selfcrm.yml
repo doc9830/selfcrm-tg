@@ -17,6 +17,10 @@ on:
         description: 'Ветка или тег SelfCRM (пусто — main)'
         required: false
         default: ''
+      state_from:
+        description: 'Проверочный запуск: синхронизировать от этого коммита SelfCRM, а не из .sync-state.json'
+        required: false
+        default: ''
   # Готово к немедленному переносу: если Android-репозиторий (или его релизный workflow)
   # дёрнет этот адрес, перенос начнётся сразу, без ожидания расписания:
   #   curl -X POST -H "Authorization: token <токен>" \
@@ -63,7 +67,12 @@ jobs:
           git -C "$UPSTREAM_DIR" log --oneline -1
 
       - name: План переноса и применение
-        run: node scripts/sync-from-selfcrm.mjs --upstream "$UPSTREAM_DIR" --apply --report "$REPORT"
+        run: |
+          ARGS=(--upstream "$UPSTREAM_DIR" --apply --report "$REPORT")
+          if [ -n "${{ inputs.state_from }}" ]; then
+            ARGS+=(--from "${{ inputs.state_from }}")
+          fi
+          node scripts/sync-from-selfcrm.mjs "${ARGS[@]}"
 
       # Отчёт пишется всегда: даже если проверки ниже упадут, план видно в сводке запуска.
       - name: Отчёт в сводку запуска
