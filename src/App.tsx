@@ -6,6 +6,7 @@ import { useRoute } from './router'
 import { ClientDetail } from './screens/ClientDetail'
 import { Clients } from './screens/Clients'
 import { Dashboard } from './screens/Dashboard'
+import { Feedback } from './screens/Feedback'
 import { OrderDetail } from './screens/OrderDetail'
 import { Orders } from './screens/Orders'
 import { Products } from './screens/Products'
@@ -15,7 +16,7 @@ import { Statistics } from './screens/Statistics'
 import { Stock } from './screens/Stock'
 import { StockProduct } from './screens/StockProduct'
 import { receiptPayloadFromQuery, receiptWantsDownload } from './pdf/receipt'
-import { clientsArchiveFromQuery, repeatOrderFromQuery } from './utils/links'
+import { clientsArchiveFromQuery, feedbackTopicFromQuery, repeatOrderFromQuery } from './utils/links'
 
 export function App() {
   return (
@@ -104,6 +105,14 @@ function renderScreen() {
       return (
         <Layout title="Статистика">
           <Statistics />
+        </Layout>
+      )
+
+    case 'feedback':
+      // Вид обращения приходит из адреса: «/feedback?topic=bug» — из настроек.
+      return (
+        <Layout title="Обратная связь">
+          <Feedback presetTopic={feedbackTopicFromQuery(route.query.get('topic'))} />
         </Layout>
       )
 

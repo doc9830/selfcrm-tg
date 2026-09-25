@@ -42,30 +42,31 @@ workflow не упадёт: ветка синхронизации всё рав�
 
 | | |
 | --- | --- |
-| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.5.0` (`38959c9`) |
+| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.5.1` (`d6f738f`) |
 | Mini App | `doc9830/selfcrm-tg`, ветка `main` |
-| Совпадает | весь `src/**`, кроме 10 файлов ниже; `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `ANDROID.md`, `LICENSE`, `scripts/*`, `release-assets/*` |
+| Совпадает | весь `src/**`, кроме 24 файлов ниже; `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `scripts/bump-version.mjs`, `scripts/telegram-release.mjs`, `release-assets/*` |
 
-**Файлы с локальной адаптацией (18)** — их придётся сливать вручную, если upstream их тронет:
+**Файлы с локальной адаптацией (24)** — их придётся сливать вручную, если upstream их тронет:
 
 | Файл | Чем отличается |
 | --- | --- |
 | `src/main.tsx` | регистрация service worker (`public/sw.js`) для офлайн-запуска |
-| `src/App.tsx` | подключение `TelegramShell` |
+| `src/App.tsx` | подключение `TelegramShell`; маршрут `/feedback` приезжает из upstream, но вставляется вручную |
+| `src/components/Icons.tsx` | иконки страницы чека (`print`, `share`, `link`) |
 | `src/state/ThemeContext.tsx` | тема Telegram синхронизируется с темой приложения |
 | `src/components/UpdateToast.tsx` | проверка обновлений только на нативной платформе |
 | `src/version.ts` | репозиторий обновлений: `doc9830/selfcrm-tg` вместо `doc9830/SelfCRM` |
 | `src/index.css` | safe area Telegram (`--tg-safe-area-inset-*`), высота окна |
-| `src/screens/Settings.tsx` | раздел Telegram, версионируемая копия с предпросмотром перед импортом |
-| `src/db/addresses.ts` | `readUserAddresses()` — отличает свою базу адресов от демо-набора |
-| `src/db/addresses.test.ts` | тесты к `readUserAddresses()` |
+| `src/screens/Settings.tsx` | раздел Telegram, облачная копия, предпросмотр перед импортом |
+| `src/screens/OrderDetail.tsx` | чек и «Поделиться» вместо сохранения файла |
+| `src/utils/navigation.ts`, `src/utils/navigation.test.ts` | распознавание адреса клиента внутри Telegram, координаты в `geo:` |
+| `src/pdf/documents.ts` (+ `src/pdf/documents.test.ts`) | отдача документа браузеру вместо файловой системы |
+| `src/db/addresses.ts`, `src/db/addresses.test.ts` | `readUserAddresses()` — отличает свою базу адресов от демо-набора |
 | `src/db/backup.ts` | сохранение файла копии: веб-загрузка и `Share` вместо `Filesystem` |
 | `index.html` | CSP, `telegram-web-app.js`, тема до первой отрисовки |
 | `package.json` | версия и состав зависимостей Telegram-слоя |
-| `.gitignore` | локальные файлы протокола и бота |
-| `.env.example` | переменные сборки Mini App |
-| `.github/workflows/deploy-pages.yml` | сборка и публикация Mini App на Pages |
-| `README.md`, `ARCHITECTURE.md` | описание Telegram-версии |
+| `.gitignore`, `.env.example` | локальные файлы протокола и бота, переменные сборки Mini App |
+| `README.md`, `ARCHITECTURE.md`, `ANDROID.md` | описание Telegram-версии |
 | `docs/TELEGRAM_RELEASES.md` | пометка, что автопубликация релизов здесь отключена |
 
 **Файлы только здесь** (upstream не должен их перезаписывать):
@@ -84,9 +85,28 @@ scripts/sync-from-selfcrm.mjs       перенос изменений upstream
 .sync-state.json, PROMPT.md, .env (не коммитится)
 ```
 
+### Пример: перенос 1.5.0 → 1.5.1 (обратная связь)
+
+Реальный запуск 25.09.2026 (`38959c9e7a..d6f738fb0a`) — как это выглядит на практике:
+
+* **перенесено автоматически (8 файлов):** `src/utils/feedback.ts` (+ `feedback.test.ts`),
+  `src/screens/Feedback.tsx`, `src/utils/links.ts` (+ тест), `src/utils/back.ts` (+ тест),
+  `android/app/build.gradle`. Обратная связь (`mailto:doc9830@proton.me`) работает в Mini App
+  без единой правки: письмо открывает клиент Telegram (`openLink`), потому что определение
+  встроенного WebView живёт в самом `src/utils/feedback.ts`, а не в адаптации копии;
+* **слито вручную (9 файлов):** строка входа в `src/screens/Settings.tsx`, маршрут в
+  `src/App.tsx`, иконка `mail` в `src/components/Icons.tsx`, стили `.feedback-mail` в
+  `src/index.css`, `APP_VERSION` в `src/version.ts`, версия в `package.json`, экспорт
+  `isNativeAndroid()` в `src/utils/navigation.ts` и правки в `README.md`/`ARCHITECTURE.md`;
+* **попутно нашлась ловушка:** `src/db/backup.test.ts` держал версию строкой (`'1.5.0'`) —
+  теперь берёт `APP_VERSION`, чтобы подъём версии не ломал тесты.
+
+Повторный перенос по тому же коммиту (правка `src/utils/feedback.ts` после первого прогона)
+занял один запуск скрипта: два файла перемотались сами, лишних конфликтов не появилось.
+
 ## 2. Правило минимальной дивергенции
 
-Список из 18 файлов — это цена адаптации: чем он длиннее, тем чаще синхронизация упирается
+Список из 24 файлов — это цена адаптации: чем он длиннее, тем чаще синхронизация упирается
 в ручное слияние. Поэтому:
 
 - Telegram-логику складываем в отдельные модули (`src/telegram/**`, `TelegramShell.tsx`),

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Client, Contractor, Product } from '../types'
+import { APP_VERSION } from '../version'
 import { demoAddresses } from './addresses'
 import { applyBackup, hasLocalData, restoreBackup } from './backup'
 import { BACKUP_FORMAT, buildBackupJson, parseBackup } from './backupFormat'
@@ -86,7 +87,9 @@ describe('backup: «создать данные → копия → восста�
     const file = JSON.parse(json) as Record<string, unknown>
     expect(file.format).toBe(BACKUP_FORMAT)
     expect(file.createdAt).toBe('2026-09-25T12:00:00.000Z')
-    expect(file.appVersion).toBe('1.5.0')
+    // Версия берётся из приложения, а не из строки в тесте: иначе подъём версии
+    // в проекте требовал бы правки теста.
+    expect(file.appVersion).toBe(APP_VERSION)
 
     // Другое устройство: та же копия в пустой базе.
     const target = new Database(new MemoryStore())
