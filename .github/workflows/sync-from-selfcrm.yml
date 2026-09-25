@@ -39,10 +39,13 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      UPSTREAM_DIR: ${{ runner.temp }}/selfcrm-upstream
-      REPORT: ${{ runner.temp }}/sync-report.md
     steps:
+      # Пути кладём в окружение шагов: контекст runner доступен в run, но не в env уровня job.
+      - name: Пути запуска
+        run: |
+          echo "UPSTREAM_DIR=$RUNNER_TEMP/selfcrm-upstream" >> "$GITHUB_ENV"
+          echo "REPORT=$RUNNER_TEMP/sync-report.md" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v4
 
