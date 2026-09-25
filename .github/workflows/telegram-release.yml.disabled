@@ -1,3 +1,10 @@
+# ВНИМАНИЕ: workflow отключён (расширение .disabled) в репозитории selfcrm-tg.
+#
+# Публикация постов о релизах Android-приложения в Telegram-канал остаётся задачей
+# репозитория doc9830/SelfCRM: там собирается APK и обложки. В selfcrm-tg релизов
+# приложения нет, а случайный запуск отправил бы подписчикам пост без APK.
+# Чтобы включить, верните файлу имя telegram-release.yml и настройте секреты
+# TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID.
 name: Telegram Release
 
 # Имя запуска видно в списке Actions. По нему scripts/telegram-release.mjs понимает,

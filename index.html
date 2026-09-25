@@ -5,23 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0f172a" />
     <!-- Политика безопасности контента. Приложение работает только со своими файлами и двумя
-         внешними сервисами: GitHub API (проверка обновлений) и подсказки Дадаты (адреса).
-         script-src/style-src содержат 'unsafe-inline', потому что тема оформления
-         устанавливается встроенным скриптом ниже (это убирает «мигание» светлой темы);
-         сторонние скрипты всё равно запрещены. -->
+         внешними сервисами: GitHub API (проверка обновлений), подсказки Дадаты (адреса) и
+         официальный скрипт Telegram WebApp. script-src/style-src содержат 'unsafe-inline',
+         потому что тема оформления устанавливается встроенным скриптом ниже (это убирает
+         «мигание» светлой темы); сторонние скрипты, кроме Telegram, запрещены. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://suggestions.dadata.ru; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://suggestions.dadata.ru; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'"
     />
     <title>SelfCRM</title>
+    <!-- Официальный Telegram WebApp API. Вне Telegram скрипт просто ничего не делает,
+         а внутри Telegram создаёт window.Telegram.WebApp. Его кэширует service worker. -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script>
       // Устанавливаем тему до отрисовки, чтобы не было «мигания» светлой темы.
+      // Порядок приоритетов: выбор пользователя в SelfCRM → тема Telegram → тема системы.
       (function () {
         try {
           var saved = localStorage.getItem('selfcrm:theme')
+          var tg = window.Telegram && window.Telegram.WebApp
           var dark = saved
             ? saved === 'dark'
-            : window.matchMedia('(prefers-color-scheme: dark)').matches
+            : tg && tg.colorScheme
+              ? tg.colorScheme === 'dark'
+              : window.matchMedia('(prefers-color-scheme: dark)').matches
           document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
           var meta = document.querySelector('meta[name="theme-color"]')
           if (meta) meta.setAttribute('content', dark ? '#0f172a' : '#ffffff')

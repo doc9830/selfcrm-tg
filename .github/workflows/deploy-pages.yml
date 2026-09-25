@@ -1,5 +1,11 @@
 name: Deploy to GitHub Pages
 
+# Сборка Telegram Mini App и публикация на GitHub Pages:
+#   https://doc9830.github.io/selfcrm-tg/
+# Адрес Mini App подставляется в бота (scripts/telegram-bot.mjs) и хранится
+# в кнопке меню чата. Vite собран с base: './' — относительные пути работают и в
+# подкаталоге Pages, и внутри WebView Telegram.
+
 on:
   push:
     branches: [main]

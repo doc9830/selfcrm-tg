@@ -1,5 +1,13 @@
 # Публикация релизов в Telegram
 
+> **Статус в этом репозитории.** Ниже описан механизм автопубликации релизов Android-версии SelfCRM
+> (APK, обложка, пост в канал). В `selfcrm-tg` он **отключён**: файл workflow лежит рядом как
+> `.github/workflows/telegram-release.yml.disabled`, скрипты `scripts/telegram-release.mjs` оставлены
+> как часть исходного проекта, но запуска не будет. Релизы Mini App не публикуются: страница
+> обновляется сама при пуше в `main` через `.github/workflows/deploy-pages.yml`, а уведомления о
+> версиях в Mini App нет (см. [TELEGRAM_ARCHITECTURE.md](./TELEGRAM_ARCHITECTURE.md)). Токен бота в
+> Mini App не используется — его читает только локальный `scripts/telegram-bot.mjs`.
+
 При публикации GitHub Release в Telegram автоматически уходит пост:
 название версии, changelog из описания релиза, кнопка скачивания APK и кнопка перехода
 к релизу. Обложка прикладывается, если она есть; если её нет — пост всё равно выходит.

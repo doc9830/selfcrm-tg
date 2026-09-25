@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
@@ -22,9 +23,22 @@ const THEME_COLOR: Record<Theme, string> = {
 
 function getInitialTheme(): Theme {
   if (typeof document === 'undefined') return 'light'
+  // Встроенный скрипт в index.html уже поставил тему до отрисовки: он учитывает
+  // и сохранённый выбор, и тему Telegram (window.Telegram.WebApp.colorScheme).
   const current = document.documentElement.dataset.theme
   if (current === 'dark' || current === 'light') return current
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+// Тема, выбранная пользователем вручную (кнопкой в шапке). null — выбора не было,
+// значит тему можно брать из окружения: сначала Telegram, затем системную.
+function readSavedTheme(): Theme | null {
+  try {
+    const value = localStorage.getItem(STORAGE_KEY)
+    return value === 'dark' || value === 'light' ? value : null
+  } catch {
+    return null
+  }
 }
 
 function applyTheme(theme: Theme): void {
@@ -40,15 +54,21 @@ function applyTheme(theme: Theme): void {
 interface ThemeContextValue {
   theme: Theme
   toggleTheme: () => void
+  // Применить тему Telegram — только пока пользователь не выбрал тему вручную.
+  applyTelegramScheme: (theme: Theme) => void
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
+  // Выбор пользователя фиксируется один раз: после нажатия кнопки темы приложение
+  // больше не слушает тему Telegram и сохраняет выбор в localStorage.
+  const userChoiceRef = useRef(readSavedTheme() !== null)
 
   useEffect(() => {
     applyTheme(theme)
+    if (!userChoiceRef.current) return
     try {
       localStorage.setItem(STORAGE_KEY, theme)
     } catch {
@@ -57,10 +77,19 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme])
 
   const toggleTheme = useCallback(() => {
+    userChoiceRef.current = true
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
   }, [])
 
-  const value = useMemo<ThemeContextValue>(() => ({ theme, toggleTheme }), [theme, toggleTheme])
+  const applyTelegramScheme = useCallback((scheme: Theme) => {
+    if (userChoiceRef.current) return
+    setTheme(scheme)
+  }, [])
+
+  const value = useMemo<ThemeContextValue>(
+    () => ({ theme, toggleTheme, applyTelegramScheme }),
+    [theme, toggleTheme, applyTelegramScheme],
+  )
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, Card, Field, Input, IntegerInput, PhoneInput, cx } from '../components/ui'
 import { Icon } from '../components/Icons'
-import { downloadBackup, downloadJson, readBackupFile } from '../db/backup'
+import { downloadBackup, downloadJson, readBackupFile, restoreBackup } from '../db/backup'
+import { describeBackup } from '../db/backupFormat'
 import { parseAddresses, saveAddresses } from '../db/addresses'
 import { seedDemo } from '../db/seed'
 import { useData } from '../state/DataContext'
@@ -116,16 +117,16 @@ export function Settings() {
     if (!file) return
     try {
       const json = await readBackupFile(file)
-      db.importData(json)
+      const backup = restoreBackup(db, json)
       refresh()
-      window.alert('Данные восстановлены из резервной копии')
+      window.alert(`Данные восстановлены из резервной копии.\n${describeBackup(backup)}`)
     } catch (e) {
       window.alert(e instanceof Error ? e.message : 'Не удалось импортировать данные')
     }
   }
 
-  // Сохранение файла: в браузере начинается скачивание, на Android открывается
-  // системное меню «Поделиться» — оттуда файл сохраняют в «Файлы» или отправляют.
+  // Сохранение файла: начинается скачивание — в Telegram файл попадает в загрузки
+  // устройства (им можно поделиться или отправить себе), в браузере — в «Загрузки».
   const runExport = async (exportFile: () => Promise<void>) => {
     try {
       await exportFile()
@@ -248,12 +249,16 @@ export function Settings() {
         <div className="section-title" style={{ marginBottom: 6 }}>
           Резервная копия
         </div>
+        <div className="settings-row-desc" style={{ marginBottom: 12 }}>
+          Ваши данные хранятся на этом устройстве. Делайте резервные копии, чтобы не потерять
+          данные при смене устройства.
+        </div>
         <div className="settings-row">
           <div>
             <div className="settings-row-title">Экспорт</div>
             <div className="settings-row-desc">
-              Скачать все данные в JSON-файл. На телефоне откроется меню «Поделиться» —
-              сохраните файл в «Файлы» или отправьте себе
+              Скачать все данные в JSON-файл. Сохраните его или отправьте себе в Telegram —
+              из копии данные восстановятся на другом устройстве
             </div>
           </div>
           <Button
@@ -269,7 +274,8 @@ export function Settings() {
           <div>
             <div className="settings-row-title">Импорт</div>
             <div className="settings-row-desc">
-              Восстановить данные из файла — текущее состояние сохраняется
+              Восстановить данные из файла — текущее состояние сохраняется. Подходит и копия,
+              сделанная в приложении для Android
             </div>
           </div>
           <Button
@@ -386,67 +392,78 @@ export function Settings() {
           <div className="section-title" style={{ marginBottom: 6 }}>
             Обновления
           </div>
-          <div className="settings-row">
-            <div>
-              <div className="settings-row-title">Проверить обновления</div>
-              <div className="settings-row-desc">Текущая версия {APP_VERSION}</div>
-            </div>
-            <Button
-              size="sm"
-              variant="secondary"
-              icon="refresh"
-              disabled={update.status === 'checking'}
-              onClick={() => void checkUpdates()}
-            >
-              {update.status === 'checking' ? 'Проверка…' : 'Проверить'}
-            </Button>
-          </div>
-
-          {update.status === 'error' && (
-            <div className="limit-banner" style={{ marginTop: 8, marginBottom: 0 }}>
-              <span className="limit-banner-text">{update.message}</span>
-            </div>
-          )}
-
-          {update.status === 'up-to-date' && (
-            <div className="field-hint" style={{ marginTop: 8 }}>
-              У вас установлена последняя версия.
-            </div>
-          )}
-
-          {update.status === 'available' && (
-            <div style={{ marginTop: 10 }}>
-              <div className="settings-row-title" style={{ marginBottom: 4 }}>
-                Доступна версия {update.release.version}
+          {Capacitor.isNativePlatform() ? (
+            <>
+              <div className="settings-row">
+                <div>
+                  <div className="settings-row-title">Проверить обновления</div>
+                  <div className="settings-row-desc">Текущая версия {APP_VERSION}</div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon="refresh"
+                  disabled={update.status === 'checking'}
+                  onClick={() => void checkUpdates()}
+                >
+                  {update.status === 'checking' ? 'Проверка…' : 'Проверить'}
+                </Button>
               </div>
-              {update.release.notes && (
-                <div className="settings-row-desc release-notes">{update.release.notes.slice(0, 1200)}</div>
-              )}
-              <Button
-                size="sm"
-                variant="primary"
-                icon="download"
-                disabled={update.busy}
-                onClick={() => void startUpdate(update.release)}
-              >
-                {update.busy
-                  ? update.downloaded
-                    ? 'Запуск…'
-                    : `Скачивание… ${Math.round(update.progress * 100)}%`
-                  : update.downloaded
-                    ? 'Установить'
-                    : 'Скачать и установить'}
-              </Button>
-              {update.error && (
+
+              {update.status === 'error' && (
                 <div className="limit-banner" style={{ marginTop: 8, marginBottom: 0 }}>
-                  <span className="limit-banner-text">{update.error}</span>
+                  <span className="limit-banner-text">{update.message}</span>
                 </div>
               )}
-              {update.downloaded && !update.busy && !update.error && (
+
+              {update.status === 'up-to-date' && (
                 <div className="field-hint" style={{ marginTop: 8 }}>
-                  Файл скачан. Если установка не запустилась, нажмите «Установить».
+                  У вас установлена последняя версия.
                 </div>
               )}
+
+              {update.status === 'available' && (
+                <div style={{ marginTop: 10 }}>
+                  <div className="settings-row-title" style={{ marginBottom: 4 }}>
+                    Доступна версия {update.release.version}
+                  </div>
+                  {update.release.notes && (
+                    <div className="settings-row-desc release-notes">
+                      {update.release.notes.slice(0, 1200)}
+                    </div>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    icon="download"
+                    disabled={update.busy}
+                    onClick={() => void startUpdate(update.release)}
+                  >
+                    {update.busy
+                      ? update.downloaded
+                        ? 'Запуск…'
+                        : `Скачивание… ${Math.round(update.progress * 100)}%`
+                      : update.downloaded
+                        ? 'Установить'
+                        : 'Скачать и установить'}
+                  </Button>
+                  {update.error && (
+                    <div className="limit-banner" style={{ marginTop: 8, marginBottom: 0 }}>
+                      <span className="limit-banner-text">{update.error}</span>
+                    </div>
+                  )}
+                  {update.downloaded && !update.busy && !update.error && (
+                    <div className="field-hint" style={{ marginTop: 8 }}>
+                      Файл скачан. Если установка не запустилась, нажмите «Установить».
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="settings-row-desc">
+              Mini App всегда открывается с последней версией с GitHub Pages — обновлять вручную
+              не нужно. Текущая версия {APP_VERSION}.
             </div>
           )}
         </Card>

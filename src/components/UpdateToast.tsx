@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Capacitor } from '@capacitor/core'
 import { Icon } from './Icons'
 import { useRoute } from '../router'
 import { fetchLatestRelease, isNewerVersion, UPDATE_SECTION_PATH } from '../updates'
@@ -29,7 +30,10 @@ export function UpdateToast() {
   const { navigate } = useRoute()
   const [version, setVersion] = useState<string | null>(null)
 
+  // В веб-версии и Mini App проверять обновления не нужно: они всегда открываются
+  // с последней сборкой GitHub Pages. Проверка релизов нужна Android-приложению.
   useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return
     let cancelled = false
 
     const check = async () => {

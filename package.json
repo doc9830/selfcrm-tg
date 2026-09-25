@@ -10,7 +10,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "bump": "node scripts/bump-version.mjs"
+    "bump": "node scripts/bump-version.mjs",
+    "bot": "node scripts/telegram-bot.mjs",
+    "bot:setup": "node scripts/telegram-bot.mjs --setup"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",

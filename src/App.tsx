@@ -1,5 +1,6 @@
 import { Layout } from './components/Layout'
 import { SystemBack } from './components/SystemBack'
+import { TelegramShell } from './components/TelegramShell'
 import { UpdateToast } from './components/UpdateToast'
 import { useRoute } from './router'
 import { ClientDetail } from './screens/ClientDetail'
@@ -19,6 +20,7 @@ export function App() {
     <>
       {renderScreen()}
       <SystemBack />
+      <TelegramShell />
       <UpdateToast />
     </>
   )

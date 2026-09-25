@@ -3,6 +3,7 @@
 // тегом (например, v1.3.1).
 export const APP_VERSION = '1.5.0'
 
-// Репозиторий, из которого приложение проверяет обновления.
-export const GITHUB_REPO = 'doc9830/SelfCRM'
+// Репозиторий, из которого приложение проверяет обновления (только Android-сборка:
+// веб-версия и Mini App всегда открываются с последней версией с GitHub Pages).
+export const GITHUB_REPO = 'doc9830/selfcrm-tg'
 export const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases`
