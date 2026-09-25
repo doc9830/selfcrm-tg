@@ -11,6 +11,10 @@
 //   node scripts/telegram-bot.mjs --setup    # один раз: команды /start, /help и кнопка меню
 //   node scripts/telegram-bot.mjs            # запустить бота (long polling)
 //
+// Кнопка меню ставится в двух местах: как общая (по умолчанию, для всех пользователей) и
+// у конкретного чата — сразу после первого сообщения боту. Так кнопка появляется даже там,
+// где Telegram не применил общую настройку (см. menuButtonHint).
+//
 // Токен читается из окружения BOT_TOKEN или из локального .env (в git не попадает).
 // В логи токен не выводится: любые сообщения об ошибках проходят через scrub().
 
@@ -27,19 +31,26 @@ const USAGE = `Бот-лаунчер SelfCRM.
 Аргументы:
   --setup               задать команды бота и кнопку меню со ссылкой на Mini App
   --webapp-url <url>    адрес Mini App (по умолчанию ${DEFAULT_WEBAPP_URL})
+  --chat <id>           задать кнопку меню для чата (можно повторять: --chat 123 --chat 456)
   --help                эта справка
 
 Окружение:
   BOT_TOKEN      токен @fastcrm_bot (иначе берётся из .env в корне проекта)
   WEBAPP_URL     адрес Mini App`
 
+const MENU_BUTTON_TEXT = 'Открыть SelfCRM'
+
 function parseArgs(argv) {
-  const args = { setup: false, help: false, webappUrl: null }
+  const args = { setup: false, help: false, webappUrl: null, chats: [] }
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === '--setup') args.setup = true
     else if (arg === '--help' || arg === '-h') args.help = true
     else if (arg === '--webapp-url') args.webappUrl = argv[++i] ?? null
+    else if (arg === '--chat') {
+      const chatId = Number(argv[++i])
+      if (Number.isFinite(chatId) && chatId !== 0) args.chats.push(chatId)
+    }
   }
   return args
 }
@@ -129,7 +140,7 @@ function helpMessage(url) {
 
 function keyboard(url) {
   return {
-    inline_keyboard: [[{ text: 'Открыть SelfCRM', web_app: { url } }]],
+    inline_keyboard: [[{ text: MENU_BUTTON_TEXT, web_app: { url } }]],
   }
 }
 
@@ -164,8 +175,41 @@ async function onUpdate(update, token, url) {
   )
 }
 
+function menuButton(url) {
+  return { type: 'web_app', text: MENU_BUTTON_TEXT, web_app: { url } }
+}
+
+// Telegram отвечает true и на те запросы, которые не применяет сразу: кнопка меню по умолчанию
+// обновляется с задержкой, поэтому значение перечитывается, а если прежнее ещё на месте —
+// печатается подсказка, а не бодрый отчёт об успехе.
+function menuButtonHint(current, url) {
+  return [
+    `Кнопку меню по умолчанию Telegram пока не применил: сейчас ${JSON.stringify(current)}, ожидалось web_app → ${url}.`,
+    'Кнопка меню обновляется не мгновенно: проверьте через пару минут.',
+    'Кнопка «Открыть SelfCRM» в ответе на /start работает всегда, а кнопку меню в чате бот ставит при первом сообщении.',
+  ].join('\n')
+}
+
+async function setMenuButton(token, chatId, url) {
+  const payload = { menu_button: menuButton(url) }
+  if (chatId) payload.chat_id = chatId
+  await call('setChatMenuButton', payload, token)
+}
+
+// Кнопка меню конкретному человеку: Telegram применяет её сразу, поэтому она ставится при
+// первом же сообщении боту — для каждого чата один раз за запуск.
+async function ensureChatMenuButton(chat, token, url, done) {
+  if (!chat || chat.type !== 'private' || done.has(chat.id)) return
+  done.add(chat.id)
+  try {
+    await setMenuButton(token, chat.id, url)
+  } catch (e) {
+    console.error(`Кнопка меню в чате не обновилась: ${scrub(e.message)}`)
+  }
+}
+
 // Команды бота и кнопка меню: после этого Mini App доступен из меню чата.
-async function setup(token, url) {
+async function setup(token, url, chats) {
   await call(
     'setMyCommands',
     {
@@ -177,14 +221,19 @@ async function setup(token, url) {
     token,
   )
 
-  await call(
-    'setChatMenuButton',
-    { menu_button: { type: 'web_app', text: 'Открыть SelfCRM', web_app: { url } } },
-    token,
-  )
+  await setMenuButton(token, null, url)
+  for (const chatId of chats) {
+    await setMenuButton(token, chatId, url)
+    console.log(`Кнопка меню задана для чата ${chatId}.`)
+  }
 
   const me = await call('getMe', {}, token)
   console.log(`Готово: @${me.username} → ${url}`)
+
+  const current = await call('getChatMenuButton', {}, token)
+  if (current?.type !== 'web_app' || current.web_app?.url !== url) {
+    console.log(menuButtonHint(current, url))
+  }
 }
 
 async function runPolling(token, url) {
@@ -198,6 +247,9 @@ async function runPolling(token, url) {
   }
   process.on('SIGINT', stop)
   process.on('SIGTERM', stop)
+
+  // Чаты, которым кнопка меню уже выставлена в этом запуске.
+  const menuButtons = new Set()
 
   let offset = 0
   while (!controller.signal.aborted) {
@@ -217,6 +269,7 @@ async function runPolling(token, url) {
     for (const update of updates) {
       offset = update.update_id + 1
       try {
+        await ensureChatMenuButton(update.message?.chat, token, url, menuButtons)
         await onUpdate(update, token, url)
       } catch (e) {
         console.error(`Не удалось ответить на сообщение: ${scrub(e.message)}`)
@@ -251,7 +304,7 @@ async function main() {
   const url = webAppUrl(args)
 
   if (args.setup) {
-    await setup(token, url)
+    await setup(token, url, args.chats)
     return
   }
 
