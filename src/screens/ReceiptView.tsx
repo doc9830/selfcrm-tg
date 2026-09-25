@@ -5,18 +5,28 @@
 // собирает документ сама: ни сервера, ни базы получателя для этого не нужно.
 //
 // Вид повторяет PDF-чек (`pdf/documents.ts`): те же строки в том же порядке, чтобы
-// ссылка и файл читались одинаково. Кнопки — те же действия, что и в карточке заказа, и
-// подписи на iPhone и Android одинаковые: «Скачать PDF», «Печать», «Поделиться».
+// ссылка и файл читались одинаково.
+//
+// Кнопки — те же действия, что и в карточке заказа, но их набор зависит от того, что умеет
+// клиент (см. `pdf/receiptDelivery.ts`):
+//   • Android и настольные браузеры — «Скачать PDF», «Печать», «Поделиться»: загрузка файла
+//     из страницы там работает;
+//   • iPhone и iPad — одна кнопка «Поделиться»: файл оттуда уходит в системное меню, где
+//     есть «Сохранить в файлы» и «Печать». Кнопки «Скачать PDF» там нет намеренно: файл она
+//     не сохраняла, а открывала тот же чек заново (blob-ссылка с `<a download>` открывается
+//     в просмотрщике PDF, а во встроенных браузерах остаётся без ответа) — признак
+//     `isIosClient()`.
 //
 // Внутри WebView клиента Telegram страница файл отдать не может: клиент игнорирует и
 // blob-ссылки, и `<a download>`, а `WebApp.downloadFile` принимает только адреса
 // `https:`. Поэтому там кнопка «Скачать PDF» не сохраняет файл, а открывает эту же
 // страницу в браузере (`WebApp.openLink` открывает внешний браузер) — с признаком
-// `dl=1`, по которому страница скачивает PDF сразу, без лишнего нажатия.
+// `dl=1`, по которому страница скачивает PDF сразу, без лишнего нажатия. На iPhone этой
+// кнопки нет, поэтому автоскачивание там пропускается (см. эффект `autoDownload`).
 //
 // Если браузер клиента загрузку отклоняет (так бывает во встроенном браузере), файл
 // отдаёт кнопка «Поделиться»: `shareReceiptPdfFile()` кладёт PDF в системное меню, где
-// есть «Сохранить в файлы». Это один и тот же путь для iPhone и Android.
+// есть «Сохранить в файлы».
 //
 // pdfmake вместе с PDF-модулем подгружается по нажатию (`import()`): он весит больше
 // мегабайта, а получатель ссылки открывает страницу ради самого чека.
@@ -33,7 +43,7 @@ import {
   unpackReceipt,
   type ReceiptData,
 } from '../pdf/receipt'
-import { canShareFiles, shareReceiptLink } from '../pdf/receiptDelivery'
+import { canShareFiles, isIosClient, shareReceiptLink } from '../pdf/receiptDelivery'
 import { go } from '../router'
 import { insideTelegramWebView, openExternalLink } from '../telegram/webapp'
 import { money } from '../utils/format'
@@ -44,10 +54,15 @@ const TELEGRAM_SAVE_HINT =
   'В Telegram файл напрямую не сохраняется. Если браузер не открылся, скачайте чек из встроенного браузера: меню «…» → «Открыть в браузере».'
 const TELEGRAM_OPEN_NOTE = 'Чек открывается в браузере — там PDF сохранится как обычный файл.'
 // Подсказка для браузера, где загрузку видно, но файл может не дойти до «Файлов»
-// (например, встроенный браузер клиента). Пути подсказки одинаковы для iPhone и Android:
-// системное меню «Поделиться» и печать есть в обеих системах.
+// (например, встроенный браузер клиента на Android): выручает системное меню, а печать —
+// второй путь к тем же «Файлам».
 const SAVE_HINT =
   'Если файл не сохранился, нажмите «Поделиться» — в системном меню есть «Сохранить в файлы». Второй путь: «Печать» → «Сохранить в файлы».'
+// Подсказка для iPhone и iPad: там файл отдаёт только системное меню «Поделиться», и в нём
+// же есть «Печать». Второе предложение — для тех, кто открыл чек внутри Telegram: системное
+// меню там может не появиться, и тогда страницу открывают во встроенном браузере.
+const IOS_HINT =
+  'На iPhone и iPad файл сохраняется через «Поделиться» → «Сохранить в файлы» (в меню есть и «Печать»). Если меню не появляется, откройте чек в браузере: «…» → «Открыть в браузере».'
 
 export function ReceiptView({ payload, autoDownload = false }: { payload: string | null; autoDownload?: boolean }) {
   const [data, setData] = useState<ReceiptData | null>(null)
@@ -58,6 +73,8 @@ export function ReceiptView({ payload, autoDownload = false }: { payload: string
   // Внутри Telegram (мини-приложение или встроенный браузер) файл сохранить нечем, а
   // ссылки открывает клиент — от этого зависят и кнопки, и подсказка под ними.
   const telegram = insideTelegramWebView()
+  // iPhone и iPad: файл из страницы не скачивается, поэтому там одно действие — «Поделиться».
+  const ios = isIosClient()
   // Автоскачивание при `dl=1` выполняется один раз: смена состояния не должна запускать
   // повторную загрузку файла.
   const autoDone = useRef(false)
@@ -110,17 +127,19 @@ export function ReceiptView({ payload, autoDownload = false }: { payload: string
   }
 
   // Страницу открыли в браузере по кнопке «Скачать PDF» (`dl=1`): файл скачивается сразу.
-  // Кнопка остаётся — если браузер такую загрузку отклонил, файл просят нажатием, а если
-  // и это не помогло, выручает «Поделиться» (файл уходит в системное меню). Внутри WebView
-  // клиента ожидания нет: там автоскачивание не работает и не нужно.
+  // На iPhone и iPad автоскачивания нет: файл забирает системное меню, а blob-ссылка открыла
+  // бы тот же чек в просмотрщике — то есть ровно то, от чего страница ушла (см.
+  // `isIosClient()`). Внутри WebView клиента ожидания тоже нет: там автоскачивание не
+  // работает и не нужно.
   useEffect(() => {
-    if (!autoDownload || telegram || autoDone.current || !data) return
+    if (!autoDownload || telegram || ios || autoDone.current || !data) return
     autoDone.current = true
     savePdf()
-  }, [autoDownload, telegram, data])
+  }, [autoDownload, telegram, ios, data])
 
   // «Скачать PDF» внутри Telegram: своей записи файла у страницы нет, поэтому открываем
-  // эту же страницу в браузере — там PDF скачивается (о чём просит признак `dl=1`).
+  // эту же страницу в браузере — там PDF скачивается (о чём просит признак `dl=1`). Кнопка
+  // есть только вне iPhone и iPad (`ios`): на iOS её место занимает «Поделиться».
   const downloadInBrowser = () => {
     if (!payload) return
     setError('')
@@ -236,23 +255,30 @@ export function ReceiptView({ payload, autoDownload = false }: { payload: string
         </div>
 
         <div className="receipt-actions">
-          {telegram ? (
-            // Внутри WebView клиента файл записать нечем — кнопка открывает чек в браузере,
-            // где PDF скачивается обычным образом (см. `downloadInBrowser`). Подпись та же,
-            // что и в браузере: действие для пользователя одно, а шаг с браузером объясняет
-            // подсказка под кнопкой.
-            <Button variant="primary" icon="download" full disabled={busy} onClick={downloadInBrowser}>
-              Скачать PDF
-            </Button>
-          ) : (
-            <Button variant="primary" icon="download" full disabled={busy} onClick={savePdf}>
-              {busy ? 'Подготовка…' : 'Скачать PDF'}
+          {/* «Скачать PDF» есть только там, где загрузка файла из страницы работает:
+              Android и настольные браузеры. На iPhone и iPad её заменяет «Поделиться». */}
+          {!ios &&
+            (telegram ? (
+              // Внутри WebView клиента файл записать нечем — кнопка открывает чек в браузере,
+              // где PDF скачивается обычным образом (см. `downloadInBrowser`). Подпись та же,
+              // что и в браузере: действие для пользователя одно, а шаг с браузером объясняет
+              // подсказка под кнопкой.
+              <Button variant="primary" icon="download" full disabled={busy} onClick={downloadInBrowser}>
+                Скачать PDF
+              </Button>
+            ) : (
+              <Button variant="primary" icon="download" full disabled={busy} onClick={savePdf}>
+                {busy ? 'Подготовка…' : 'Скачать PDF'}
+              </Button>
+            ))}
+          {!ios && (
+            <Button variant="secondary" icon="print" full onClick={() => window.print()}>
+              Печать
             </Button>
           )}
-          <Button variant="secondary" icon="print" full onClick={() => window.print()}>
-            Печать
-          </Button>
-          <Button variant="outline" icon="share" full disabled={busy} onClick={share}>
+          {/* На iPhone и iPad это единственное действие, поэтому оно главное: в системном меню
+              есть и «Сохранить в файлы», и «Печать». */}
+          <Button variant={ios ? 'primary' : 'outline'} icon="share" full disabled={busy} onClick={share}>
             Поделиться
           </Button>
         </div>
@@ -267,7 +293,7 @@ export function ReceiptView({ payload, autoDownload = false }: { payload: string
             {note}
           </div>
         )}
-        <div className="field-hint receipt-hint">{telegram ? TELEGRAM_SAVE_HINT : SAVE_HINT}</div>
+        <div className="field-hint receipt-hint">{ios ? IOS_HINT : telegram ? TELEGRAM_SAVE_HINT : SAVE_HINT}</div>
       </div>
     </Shell>
   )

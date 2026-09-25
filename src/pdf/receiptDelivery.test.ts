@@ -6,7 +6,14 @@ vi.mock('@capacitor/core', () => ({
   Capacitor: { isNativePlatform: () => false },
 }))
 
-import { canShareFiles, copyReceiptLink, planReceiptDelivery, shareReceiptFile, shareReceiptLink } from './receiptDelivery'
+import {
+  canShareFiles,
+  copyReceiptLink,
+  isIosClient,
+  planReceiptDelivery,
+  shareReceiptFile,
+  shareReceiptLink,
+} from './receiptDelivery'
 import type { TelegramWebApp } from '../telegram/webapp'
 
 afterEach(() => {
@@ -121,6 +128,43 @@ describe('canShareFiles', () => {
     vi.stubGlobal('File', class {})
 
     expect(canShareFiles()).toBe(false)
+  })
+})
+
+describe('isIosClient', () => {
+  it('узнаёт iPhone и iPad по названию клиента', () => {
+    stubNavigator({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15' })
+    expect(isIosClient()).toBe(true)
+
+    stubNavigator({ userAgent: 'Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15' })
+    expect(isIosClient()).toBe(true)
+  })
+
+  it('узнаёт iPad, который представляется настольным Mac', () => {
+    // iPadOS 13+ прячет название планшета, и единственный признак — сенсорный экран.
+    stubNavigator({
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
+      maxTouchPoints: 5,
+    })
+    expect(isIosClient()).toBe(true)
+
+    // Настольный Mac сенсорного экрана не имеет: там кнопки как в браузере.
+    stubNavigator({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' })
+    expect(isIosClient()).toBe(false)
+  })
+
+  it('Android и настольные клиенты остаются при своих кнопках', () => {
+    // На Android скачивание файла из страницы работает, поэтому «Скачать PDF» там нужна.
+    stubNavigator({ userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/125' })
+    expect(isIosClient()).toBe(false)
+
+    stubNavigator({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' })
+    expect(isIosClient()).toBe(false)
+  })
+
+  it('без navigator считает клиент обычным', () => {
+    stubNavigator(undefined)
+    expect(isIosClient()).toBe(false)
   })
 })
 
