@@ -114,6 +114,10 @@ jobs:
           git add -A
           git commit -m "$TITLE"
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            # Ветка уже есть (повторный запуск по тому же коммиту upstream) — обновляем её.
+            # Перед --force-with-lease нужен свежий remote-tracking ref: в чистом checkout
+            # его нет, и git отказывается пушить «вслепую» (stale info).
+            git fetch --quiet origin "$BRANCH"
             git push --force-with-lease origin "$BRANCH"
           else
             git push --set-upstream origin "$BRANCH"
