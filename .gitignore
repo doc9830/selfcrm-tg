@@ -1,0 +1,18 @@
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json
+.capacitor
+promt.md
+# Техзадание с данными бота (живой токен) — в репозиторий не попадает.
+SelfCRM — Telegram Release System.md
+
+# Техническое задание (PROMPT.md) и локальные настройки не публикуются.
+PROMPT.md

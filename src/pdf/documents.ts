@@ -1,0 +1,175 @@
+// Генерация документов. Реализован чек (квитанция) по завершённому заказу.
+// В основе — pdfmake: работает офлайн, встроенный шрифт Roboto поддерживает кириллицу.
+
+import pdfMake from 'pdfmake/build/pdfmake'
+import vfs from 'pdfmake/build/vfs_fonts'
+import type { Client, Contractor, Order } from '../types'
+import { Capacitor } from '@capacitor/core'
+import { Directory, Filesystem } from '@capacitor/filesystem'
+import { Share } from '@capacitor/share'
+import { orderHeading } from '../utils/orders'
+import { orderPaymentState } from '../utils/payments'
+
+// В pdfmake 0.3.x шрифт Roboto (с кириллицей) подключается через виртуальную ФС.
+pdfMake.addVirtualFileSystem(vfs)
+
+// Возвращает готовый data-URL документа (нужно, чтобы записать файл на устройство).
+async function getPdfDataUrl(docDefinition: unknown): Promise<string> {
+  return pdfMake.createPdf(docDefinition).getDataUrl()
+}
+
+// Сумма без знака валюты (символ «₽» может отсутствовать во встроенном шрифте),
+// используем «руб.».
+function pdfMoney(value: number): string {
+  const formatted = new Intl.NumberFormat('ru-RU', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(value) ? value : 0)
+  return `${formatted} руб.`
+}
+
+export interface ReceiptInput {
+  order: Order
+  client?: Client
+  contractor: Contractor
+}
+
+export async function generateReceiptPdf(input: ReceiptInput): Promise<void> {
+  const { order, client, contractor } = input
+  const total = order.items.reduce((sum, it) => sum + it.price * it.qty, 0)
+  // Номер заказа (у старых записей — первые символы идентификатора).
+  const number = order.number ? String(order.number) : order.id.slice(0, 8).toUpperCase()
+  const payment = orderPaymentState(order)
+
+  const header: Array<Record<string, unknown>> = []
+  if (contractor.name.trim()) {
+    header.push({ text: contractor.name.trim(), style: 'company' })
+  }
+  const props: string[] = []
+  if (contractor.inn.trim()) props.push(`ИНН ${contractor.inn.trim()}`)
+  if (contractor.ogrn.trim()) props.push(`ОГРН ${contractor.ogrn.trim()}`)
+  if (contractor.kpp.trim()) props.push(`КПП ${contractor.kpp.trim()}`)
+  if (contractor.address.trim()) props.push(contractor.address.trim())
+  if (contractor.phone.trim()) props.push(`Тел. ${contractor.phone.trim()}`)
+  if (contractor.email.trim()) props.push(contractor.email.trim())
+  if (props.length) {
+    header.push({ text: props.join(' · '), style: 'companyProps' })
+  }
+
+  const clientLines: Array<Record<string, unknown>> = [
+    { text: `Заказчик: ${client?.name?.trim() || '—'}` },
+  ]
+  if (client?.phone) clientLines.push({ text: `Телефон: ${client.phone}` })
+  if (client?.address) clientLines.push({ text: `Адрес: ${client.address}` })
+
+  const tableHeader = ['№', 'Наименование', 'Кол-во', 'Цена', 'Сумма'].map((t) => ({
+    text: t,
+    bold: true,
+  }))
+
+  const tableBody: unknown[][] = [
+    tableHeader,
+    ...order.items.map((item, i) => [
+      String(i + 1),
+      item.name,
+      String(item.qty),
+      pdfMoney(item.price),
+      pdfMoney(item.price * item.qty),
+    ]),
+  ]
+
+  const content: unknown[] = [
+    ...header,
+    // Номер и дата заказа — в шапке чека: по ним заказ находят в переписке.
+    { text: orderHeading(order), alignment: 'center', style: 'title', margin: [0, 10, 0, 2] },
+    { text: 'ЧЕК', alignment: 'center', style: 'subtitle', margin: [0, 0, 0, 4] },
+    ...clientLines.map((line) => ({ ...line, margin: [0, 4, 0, 0], style: 'meta' })),
+    {
+      canvas: [{ type: 'line', x1: 0, y1: 0, x2: 270, y2: 0, lineWidth: 1, lineColor: '#cccccc' }],
+      margin: [0, 10, 0, 10],
+    },
+    {
+      table: {
+        headerRows: 1,
+        widths: ['auto', '*', 'auto', 'auto', 'auto'],
+        body: tableBody,
+      },
+      layout: {
+        hLineWidth: () => 0.5,
+        vLineWidth: () => 0,
+        hLineColor: () => '#e5e5e5',
+        paddingLeft: () => 2,
+        paddingRight: () => 2,
+        paddingTop: () => 3,
+        paddingBottom: () => 3,
+      },
+    },
+    {
+      text: `Итого: ${pdfMoney(total)}`,
+      style: 'total',
+      alignment: 'right',
+      margin: [0, 10, 0, 0],
+    },
+    // Оплата показывается только по заказам, где что-то уже внесено.
+    ...(payment.paid > 0
+      ? [
+          {
+            text: `Оплачено: ${pdfMoney(payment.paid)}`,
+            alignment: 'right',
+            style: 'meta',
+            margin: [0, 2, 0, 0],
+          },
+          ...(payment.remaining > 0
+            ? [
+                {
+                  text: `К оплате: ${pdfMoney(payment.remaining)}`,
+                  alignment: 'right',
+                  style: 'meta',
+                  margin: [0, 1, 0, 0],
+                },
+              ]
+            : []),
+        ]
+      : []),
+    { text: 'Спасибо за покупку!', alignment: 'center', style: 'thanks', margin: [0, 14, 0, 0] },
+  ]
+
+  const docDefinition = {
+    pageSize: 'A6' as const,
+    pageMargins: [16, 16, 16, 16] as [number, number, number, number],
+    content,
+    defaultStyle: { font: 'Roboto', fontSize: 8, color: '#111827' },
+    styles: {
+      company: { fontSize: 10, bold: true },
+      companyProps: { fontSize: 7.5, color: '#555555', margin: [0, 2, 0, 0] },
+      title: { fontSize: 13, bold: true },
+      subtitle: { fontSize: 9, color: '#666666' },
+      meta: { fontSize: 8, color: '#333333' },
+      total: { fontSize: 11, bold: true },
+      thanks: { fontSize: 8, color: '#666666' },
+    },
+  }
+
+  const filename = `check-${number}.pdf`
+
+  if (Capacitor.isNativePlatform()) {
+    // В Android-WebView скачивание через браузер не срабатывает, поэтому пишем PDF
+    // во временный каталог устройства и открываем системное меню «Поделиться».
+    const dataUrl = await getPdfDataUrl(docDefinition)
+    const file = await Filesystem.writeFile({
+      path: filename,
+      data: dataUrl,
+      directory: Directory.Cache,
+      recursive: true,
+    })
+    await Share.share({
+      title: `Заказ № ${number}`,
+      text: `Заказ № ${number}`,
+      files: [file.uri],
+    })
+    return
+  }
+
+  await pdfMake.createPdf(docDefinition).download(filename)
+}
+
