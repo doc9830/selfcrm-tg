@@ -16,6 +16,9 @@
 // GitHub API и присылает changelog. Сам Mini App берётся с GitHub Pages и обновляется сам,
 // поэтому кнопка в ответе всегда открывает новую версию — релизов и переустановки нет.
 //
+// К каждому ответу бот добавляет кнопки со ссылками проекта: GitHub (исходный код), лендинг
+// и группу SelfCRM для вопросов — в /help те же адреса перечислены текстом.
+//
 // Кнопка меню ставится в двух местах: как общая (по умолчанию, для всех пользователей) и
 // у конкретного чата — сразу после первого сообщения боту. Так кнопка появляется даже там,
 // где Telegram не применил общую настройку (см. menuButtonHint).
@@ -36,6 +39,13 @@ const DEFAULT_WEBAPP_URL = 'https://doc9830.github.io/selfcrm-tg/'
 const RELEASES_API = 'https://api.github.com/repos/doc9830/SelfCRM/releases'
 const RELEASES_URL = 'https://github.com/doc9830/SelfCRM/releases'
 const GITHUB_USER_AGENT = 'selfcrm-telegram-bot'
+
+// Постоянные ссылки проекта. Бот добавляет их кнопками к каждому ответу (см. keyboard),
+// а в /help перечисляет текстом: исходный код, лендинг с описанием и установкой и группа
+// SelfCRM для вопросов — это публичная группа-обсуждение канала SelfCRM.
+const GITHUB_URL = 'https://github.com/doc9830/SelfCRM'
+const LANDING_URL = 'https://doc9830.github.io/SelfCRMlanding/'
+const GROUP_URL = 'https://t.me/selfcrmtg'
 
 // Ответ GitHub кэшируется: лимит для неавторизованных запросов — 60 в час с одного IP.
 const RELEASE_CACHE_MS = 10 * 60 * 1000
@@ -214,6 +224,7 @@ async function sendWhatsnew(chatId, token, url) {
 }
 
 // Тексты бота: обычный SelfCRM, который просто открывается внутри Telegram.
+// Ссылки дублируются кнопками (keyboard), поэтому в тексте они не перечисляются.
 function startMessage() {
   return [
     'SelfCRM',
@@ -222,6 +233,9 @@ function startMessage() {
     '',
     'Клиенты, заказы, товары и напоминания. Данные хранятся на вашем устройстве —',
     'обычные операции работают без связи с нашими серверами.',
+    '',
+    'Исходный код, описание возможностей и группа SelfCRM для вопросов —',
+    'кнопками ниже.',
   ].join('\n')
 }
 
@@ -249,6 +263,11 @@ function helpMessage(url) {
     'устройства. Файл копии можно отправить в этот чат — он останется в истории',
     'чата и его можно будет вернуть импортом.',
     '',
+    'Ссылки:',
+    `• GitHub — исходный код: ${GITHUB_URL}`,
+    `• Лендинг — возможности и установка: ${LANDING_URL}`,
+    `• Группа SelfCRM — вопросы и обсуждения: ${GROUP_URL}`,
+    '',
     `Адрес Mini App: ${url}`,
   ].join('\n')
 }
@@ -266,9 +285,18 @@ function backupMessage() {
   ].join('\n')
 }
 
+// Клавиатура ответа: запуск Mini App, а под ним — постоянные ссылки проекта.
+// Кнопка с web_app работает только в личном чате; ссылки — где угодно.
 function keyboard(url) {
   return {
-    inline_keyboard: [[{ text: MENU_BUTTON_TEXT, web_app: { url } }]],
+    inline_keyboard: [
+      [{ text: MENU_BUTTON_TEXT, web_app: { url } }],
+      [
+        { text: 'GitHub', url: GITHUB_URL },
+        { text: 'Лендинг', url: LANDING_URL },
+      ],
+      [{ text: 'Группа SelfCRM', url: GROUP_URL }],
+    ],
   }
 }
 
@@ -288,7 +316,11 @@ async function onUpdate(update, token, url) {
   }
 
   if (command === '/help') {
-    await call('sendMessage', { chat_id: message.chat.id, text: helpMessage(url) }, token)
+    await call(
+      'sendMessage',
+      { chat_id: message.chat.id, text: helpMessage(url), reply_markup: keyboard(url) },
+      token,
+    )
     return
   }
 
