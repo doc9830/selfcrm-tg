@@ -1,7 +1,7 @@
 // Проверка описания PDF-чека: описание собирается из данных чека, а не из заказа,
 // поэтому оно одинаково для файла и для страницы по ссылке. Здесь проверяется
 // состав документа, а не картинка: рендер pdfmake в тестах не нужен.
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Окружение Telegram подменяется, потому что от него зависит сохранение файла на
 // странице чека: в мини-приложении клиент файлы не принимает, и об этом нужно знать
@@ -13,8 +13,14 @@ vi.mock('../telegram/webapp', () => ({
 }))
 
 import { emptyContractor, type Client, type Order } from '../types'
-import { receiptDocDefinition, saveReceiptPdf } from './documents'
+import { receiptDocDefinition, saveReceiptPdf, shareReceiptPdfFile } from './documents'
 import { receiptData } from './receipt'
+
+afterEach(() => {
+  // Проверки файловой отправки подменяют глобальные `navigator`/`File`: возвращаем их
+  // на место, чтобы тесты не зависели друг от друга.
+  vi.unstubAllGlobals()
+})
 
 // Возвращает окружение к обычному браузеру: тесты не должны зависеть от порядка запуска.
 function browserEnv(): void {
@@ -149,5 +155,18 @@ describe('сохранение чека файлом', () => {
       'unsupported',
     )
     browserEnv()
+  })
+})
+
+describe('отправка чека файлом', () => {
+  it('клиенту без поддержки файлов отвечает отказом, а не пустым меню', async () => {
+    // Так ведёт себя WebView, который объявил Web Share API, но файлов не принимает:
+    // PDF даже не собирается — вызывающий переходит к ссылке или к скачиванию.
+    vi.stubGlobal('navigator', {})
+    vi.stubGlobal('File', undefined)
+
+    expect(await shareReceiptPdfFile(receiptData({ order: makeOrder(), client, contractor }))).toBe(
+      'unavailable',
+    )
   })
 })

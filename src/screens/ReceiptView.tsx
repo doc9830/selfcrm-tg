@@ -5,14 +5,18 @@
 // собирает документ сама: ни сервера, ни базы получателя для этого не нужно.
 //
 // Вид повторяет PDF-чек (`pdf/documents.ts`): те же строки в том же порядке, чтобы
-// ссылка и файл читались одинаково. Кнопки — те же действия, что и в карточке заказа:
-// получить файл, напечатать (на iPhone печать сохраняет PDF в «Файлы») и поделиться.
+// ссылка и файл читались одинаково. Кнопки — те же действия, что и в карточке заказа, и
+// подписи на iPhone и Android одинаковые: «Скачать PDF», «Печать», «Поделиться».
 //
-// Внутри Telegram страница файл отдать не может: клиент игнорирует и blob-ссылки, и
-// `<a download>`, а `WebApp.downloadFile` принимает только адреса `https:`. Поэтому там
-// кнопка «Скачать PDF» не сохраняет файл, а открывает эту же страницу в браузере
-// (`WebApp.openLink` открывает внешний браузер) — с признаком `dl=1`, по которому
-// страница скачивает PDF сразу, без лишнего нажатия.
+// Внутри WebView клиента Telegram страница файл отдать не может: клиент игнорирует и
+// blob-ссылки, и `<a download>`, а `WebApp.downloadFile` принимает только адреса
+// `https:`. Поэтому там кнопка «Скачать PDF» не сохраняет файл, а открывает эту же
+// страницу в браузере (`WebApp.openLink` открывает внешний браузер) — с признаком
+// `dl=1`, по которому страница скачивает PDF сразу, без лишнего нажатия.
+//
+// Если браузер клиента загрузку отклоняет (так бывает во встроенном браузере), файл
+// отдаёт кнопка «Поделиться»: `shareReceiptPdfFile()` кладёт PDF в системное меню, где
+// есть «Сохранить в файлы». Это один и тот же путь для iPhone и Android.
 //
 // pdfmake вместе с PDF-модулем подгружается по нажатию (`import()`): он весит больше
 // мегабайта, а получатель ссылки открывает страницу ради самого чека.
@@ -29,7 +33,7 @@ import {
   unpackReceipt,
   type ReceiptData,
 } from '../pdf/receipt'
-import { shareReceiptLink } from '../pdf/receiptDelivery'
+import { canShareFiles, shareReceiptLink } from '../pdf/receiptDelivery'
 import { go } from '../router'
 import { insideTelegramWebView, openExternalLink } from '../telegram/webapp'
 import { money } from '../utils/format'
@@ -39,8 +43,11 @@ import { money } from '../utils/format'
 const TELEGRAM_SAVE_HINT =
   'В Telegram файл напрямую не сохраняется. Если браузер не открылся, скачайте чек из встроенного браузера: меню «…» → «Открыть в браузере».'
 const TELEGRAM_OPEN_NOTE = 'Чек открывается в браузере — там PDF сохранится как обычный файл.'
-const BROWSER_SAVE_HINT =
-  'Если файл не сохраняется, нажмите «Печать» и выберите «Сохранить в файлы».'
+// Подсказка для браузера, где загрузку видно, но файл может не дойти до «Файлов»
+// (например, встроенный браузер клиента). Пути подсказки одинаковы для iPhone и Android:
+// системное меню «Поделиться» и печать есть в обеих системах.
+const SAVE_HINT =
+  'Если файл не сохранился, нажмите «Поделиться» — в системном меню есть «Сохранить в файлы». Второй путь: «Печать» → «Сохранить в файлы».'
 
 export function ReceiptView({ payload, autoDownload = false }: { payload: string | null; autoDownload?: boolean }) {
   const [data, setData] = useState<ReceiptData | null>(null)
@@ -93,7 +100,9 @@ export function ReceiptView({ payload, autoDownload = false }: { payload: string
         // оставлен честным на случай, если окружение распознали иначе.
         setNote(TELEGRAM_SAVE_HINT)
       } else {
-        setNote('Файл отправлен на сохранение. Если загрузка не началась, нажмите «Печать» и сохраните PDF.')
+        setNote(
+          'Файл отправлен на сохранение. Если загрузка не началась, нажмите «Поделиться» и выберите «Сохранить в файлы».',
+        )
       }
     })()
       .catch((e) => setError(e instanceof Error ? e.message : 'Не удалось сохранить файл'))
@@ -101,8 +110,9 @@ export function ReceiptView({ payload, autoDownload = false }: { payload: string
   }
 
   // Страницу открыли в браузере по кнопке «Скачать PDF» (`dl=1`): файл скачивается сразу.
-  // Кнопка «Сохранить PDF» остаётся — если браузер такую загрузку отклонил, файл просят
-  // нажатием. Внутри Telegram ожидания нет: там автоскачивание не работает и не нужно.
+  // Кнопка остаётся — если браузер такую загрузку отклонил, файл просят нажатием, а если
+  // и это не помогло, выручает «Поделиться» (файл уходит в системное меню). Внутри WebView
+  // клиента ожидания нет: там автоскачивание не работает и не нужно.
   useEffect(() => {
     if (!autoDownload || telegram || autoDone.current || !data) return
     autoDone.current = true
@@ -126,13 +136,26 @@ export function ReceiptView({ payload, autoDownload = false }: { payload: string
     setError('')
     setNote('')
     void (async () => {
-      // Ссылка на этот же экран: адрес страницы и есть ссылка на чек.
+      // Сначала файл: системное меню умеет «Сохранить в файлы» и на iPhone, и на Android —
+      // это запасной путь, когда браузер загрузку отклоняет. PDF собирается только если
+      // клиент действительно принимает файлы (`canShareFiles`), иначе pdfmake не грузим.
+      if (canShareFiles()) {
+        const { shareReceiptPdfFile } = await import('../pdf/documents')
+        const file = await shareReceiptPdfFile(data)
+        if (file === 'shared') {
+          setNote('PDF готов — выберите, куда его сохранить или отправить.')
+          return
+        }
+        if (file === 'cancelled') return
+      }
+      // Клиент файл не принимает: делимся ссылкой на этот же экран — адрес страницы и
+      // есть ссылка на чек.
       const url = receiptUrl(await packReceipt(data))
       const target = await shareReceiptLink(url, receiptMessage(data))
       if (target === 'copied') setNote('Ссылка скопирована — вставьте её в сообщение.')
       else if (target === 'failed') setError('Не удалось поделиться — скопируйте адрес из строки браузера')
     })()
-      .catch((e) => setError(e instanceof Error ? e.message : 'Не удалось поделиться ссылкой'))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Не удалось поделиться'))
       .finally(() => setBusy(false))
   }
 
@@ -214,14 +237,16 @@ export function ReceiptView({ payload, autoDownload = false }: { payload: string
 
         <div className="receipt-actions">
           {telegram ? (
-            // Внутри Telegram файл записать нечем — кнопка открывает чек в браузере, где
-            // PDF скачивается обычным образом (см. `downloadInBrowser`).
+            // Внутри WebView клиента файл записать нечем — кнопка открывает чек в браузере,
+            // где PDF скачивается обычным образом (см. `downloadInBrowser`). Подпись та же,
+            // что и в браузере: действие для пользователя одно, а шаг с браузером объясняет
+            // подсказка под кнопкой.
             <Button variant="primary" icon="download" full disabled={busy} onClick={downloadInBrowser}>
-              Скачать PDF в браузере
+              Скачать PDF
             </Button>
           ) : (
             <Button variant="primary" icon="download" full disabled={busy} onClick={savePdf}>
-              {busy ? 'Подготовка…' : 'Сохранить PDF'}
+              {busy ? 'Подготовка…' : 'Скачать PDF'}
             </Button>
           )}
           <Button variant="secondary" icon="print" full onClick={() => window.print()}>
@@ -242,7 +267,7 @@ export function ReceiptView({ payload, autoDownload = false }: { payload: string
             {note}
           </div>
         )}
-        <div className="field-hint receipt-hint">{telegram ? TELEGRAM_SAVE_HINT : BROWSER_SAVE_HINT}</div>
+        <div className="field-hint receipt-hint">{telegram ? TELEGRAM_SAVE_HINT : SAVE_HINT}</div>
       </div>
     </Shell>
   )

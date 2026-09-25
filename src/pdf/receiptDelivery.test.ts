@@ -6,7 +6,7 @@ vi.mock('@capacitor/core', () => ({
   Capacitor: { isNativePlatform: () => false },
 }))
 
-import { canShareFiles, copyReceiptLink, planReceiptDelivery, shareReceiptLink } from './receiptDelivery'
+import { canShareFiles, copyReceiptLink, planReceiptDelivery, shareReceiptFile, shareReceiptLink } from './receiptDelivery'
 import type { TelegramWebApp } from '../telegram/webapp'
 
 afterEach(() => {
@@ -45,19 +45,19 @@ describe('выбор способа доставки', () => {
   })
 
   it('в Telegram ссылка важнее файла, даже если WebView обещает canShare', () => {
-    // Android-WebView объявляет и `navigator.share`, и `canShare` для PDF, но системного
-    // меню у него нет: нажатие «Чек (PDF)» не делало ничего. Клиент Telegram умеет
-    // открыть выбор чата по ссылке — этот путь и выбирается.
+    // WebView клиента (так ведёт себя, например, Android) объявляет и `navigator.share`, и
+    // `canShare` для PDF, но системного меню у него нет: нажатие «Чек (PDF)» не делало
+    // ничего. Клиент Telegram умеет открыть выбор чата по ссылке — этот путь и выбирается.
     expect(planReceiptDelivery({ native: false, canShareFiles: true, telegram: true })).toBe(
       'link-share',
     )
-    // Android-сборка важнее всего: там файл пишется на устройство.
+    // Нативная сборка важнее всего: там файл пишется на устройство.
     expect(planReceiptDelivery({ native: true, canShareFiles: true, telegram: true })).toBe('native')
   })
 
   it('в Telegram Mini App без файлов уходит ссылка', () => {
     // Клиент Telegram не сохраняет blob и не показывает blob-ссылки, поэтому
-    // единственный рабочий путь — адрес страницы чека.
+    // единственный рабочий путь — адрес страницы чека. Путь один для iPhone и Android.
     expect(planReceiptDelivery({ native: false, canShareFiles: false, telegram: true })).toBe(
       'link-share',
     )
@@ -121,6 +121,42 @@ describe('canShareFiles', () => {
     vi.stubGlobal('File', class {})
 
     expect(canShareFiles()).toBe(false)
+  })
+})
+
+describe('shareReceiptFile', () => {
+  const file = { name: 'check.pdf', type: 'application/pdf' } as unknown as File
+  const text = 'Чек по заказу №42 от 19.09.2026'
+
+  it('без Web Share API файл отдать нечем', async () => {
+    stubNavigator(undefined)
+    expect(await shareReceiptFile(file, text)).toBe('unavailable')
+
+    stubNavigator({})
+    expect(await shareReceiptFile(file, text)).toBe('unavailable')
+  })
+
+  it('отдаёт PDF системному меню — один путь и на iPhone, и на Android', async () => {
+    const share = vi.fn(() => Promise.resolve())
+    stubNavigator({ share })
+
+    expect(await shareReceiptFile(file, text)).toBe('shared')
+    // В меню уходит сам файл, а не blob и не ссылка: меню «Поделиться» принимает файлы.
+    expect(share).toHaveBeenCalledWith({ files: [file], title: text, text })
+  })
+
+  it('отмена системного меню — не ошибка', async () => {
+    const abort = Object.assign(new Error('отмена'), { name: 'AbortError' })
+    stubNavigator({ share: () => Promise.reject(abort) })
+
+    expect(await shareReceiptFile(file, text)).toBe('cancelled')
+  })
+
+  it('отказ клиента — повод перейти к ссылке', async () => {
+    // Так ведёт себя WebView, который объявил Web Share API, но файлов не принимает.
+    stubNavigator({ share: () => Promise.reject(new Error('файлы не поддерживаются')) })
+
+    expect(await shareReceiptFile(file, text)).toBe('unavailable')
   })
 })
 

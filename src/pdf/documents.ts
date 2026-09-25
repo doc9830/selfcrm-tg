@@ -5,7 +5,10 @@
 // `planReceiptDelivery` (pdf/receiptDelivery.ts). Сам документ собирается по данным
 // чека (pdf/receipt.ts), поэтому PDF по ссылке не отличается от файла. Точки входа:
 // `shareOrderReceipt()` — кнопка «Чек (PDF)» в карточке заказа, `saveReceiptPdf()` —
-// «Сохранить PDF» на странице чека.
+// кнопка «Скачать PDF» на странице чека, `shareReceiptPdfFile()` — её же кнопка
+// «Поделиться» (файлом, а не ссылкой, когда клиент умеет отдавать файлы).
+// Пути одинаковы для iPhone и Android: они зависят от возможностей клиента, а не от
+// названия системы.
 
 import pdfMake from 'pdfmake/build/pdfmake'
 import vfs from 'pdfmake/build/vfs_fonts'
@@ -26,7 +29,7 @@ import {
   type ReceiptData,
   type ReceiptInput,
 } from './receipt'
-import { canShareFiles, planReceiptDelivery } from './receiptDelivery'
+import { canShareFiles, planReceiptDelivery, shareReceiptFile, type ReceiptFileTarget } from './receiptDelivery'
 
 // В pdfmake 0.3.x шрифт Roboto (с кириллицей) подключается через виртуальную ФС.
 pdfMake.addVirtualFileSystem(vfs)
@@ -170,8 +173,18 @@ export async function receiptPdfFile(data: ReceiptData): Promise<File> {
   return new File([blob], receiptFileName(data), { type: 'application/pdf' })
 }
 
-// Обычное скачивание файла. Работает в браузере; в Telegram Mini App и Android-WebView
-// клиент его игнорирует — там путь доставки выбирает `planReceiptDelivery`.
+// Отдаёт PDF чека системному меню «Поделиться». Один и тот же вызов для карточки заказа
+// и для страницы чека — поэтому поведение не зависит от того, iPhone у пользователя или
+// Android. Файл собирается только когда клиент умеет его принять (`canShareFiles`):
+// иначе ответ 'unavailable', а вызывающий переходит к ссылке или к скачиванию.
+export async function shareReceiptPdfFile(data: ReceiptData): Promise<ReceiptFileTarget> {
+  if (!canShareFiles()) return 'unavailable'
+  return shareReceiptFile(await receiptPdfFile(data), receiptMessage(data))
+}
+
+// Обычное скачивание файла. Работает в браузере; в WebView клиента Telegram (и в
+// мини-приложении, и во встроенном браузере) клиент его игнорирует — там путь доставки
+// выбирает `planReceiptDelivery`.
 export async function downloadReceiptPdf(data: ReceiptData): Promise<void> {
   const blob = await pdfMake.createPdf(receiptDocDefinition(data)).getBlob()
   const url = URL.createObjectURL(blob)
@@ -195,7 +208,7 @@ export type ReceiptDeliveryResult =
 
 // Отдаёт чек по завершённому заказу: файлом, ссылкой или системным меню — смотря что
 // умеет клиент. Путь выбирается один раз здесь, поэтому экраны не знают про
-// особенности Telegram и Android.
+// особенности WebView клиента Telegram и про системные меню.
 export async function shareOrderReceipt(input: ReceiptInput): Promise<ReceiptDeliveryResult> {
   const data = receiptData(input)
   const plan = planReceiptDelivery({
@@ -210,22 +223,15 @@ export async function shareOrderReceipt(input: ReceiptInput): Promise<ReceiptDel
   }
 
   if (plan === 'file-share') {
-    try {
-      await navigator.share({
-        files: [await receiptPdfFile(data)],
-        title: receiptHeading(data),
-        text: receiptMessage(data),
-      })
-      return { kind: 'shared' }
-    } catch (error) {
-      if (isShareCancel(error)) return { kind: 'cancelled' }
-      // Клиент обещал поддержку файлов, но отдать не смог — например, системное меню
-      // требует нажатия в том же такте, а PDF собирался асинхронно. Запасной путь —
-      // скачивание: ему нажатие не нужно. В Telegram этот путь не выполняется:
-      // `planReceiptDelivery` отправляет мини-приложение сразу к ссылке.
-      await downloadReceiptPdf(data)
-      return { kind: 'downloaded' }
-    }
+    const target = await shareReceiptPdfFile(data)
+    if (target === 'shared') return { kind: 'shared' }
+    if (target === 'cancelled') return { kind: 'cancelled' }
+    // Клиент обещал поддержку файлов, но отдать не смог — например, системное меню
+    // требует нажатия в том же такте, а PDF собирался асинхронно. Запасной путь —
+    // скачивание: ему нажатие не нужно. В WebView клиента Telegram этот путь не
+    // выполняется: `planReceiptDelivery` отправляет его сразу к ссылке.
+    await downloadReceiptPdf(data)
+    return { kind: 'downloaded' }
   }
 
   if (plan === 'link-share') return receiptLink(data)
@@ -236,15 +242,17 @@ export async function shareOrderReceipt(input: ReceiptInput): Promise<ReceiptDel
 
 // Что произошло при сохранении файла на странице чека: 'native' — PDF записан и отдан
 // системному меню, 'downloaded' — файл забирает браузер, 'unsupported' — клиент файлы
-// не принимает (Telegram игнорирует и blob-ссылки, и `<a download>`, а `WebApp.downloadFile`
-// принимает только адреса `https:`).
+// не принимает (WebView Telegram игнорирует и blob-ссылки, и `<a download>`, а
+// `WebApp.downloadFile` принимает только адреса `https:`).
 export type ReceiptSaveResult = 'native' | 'downloaded' | 'unsupported'
 
 // Сохраняет чек файлом там, где это возможно. Отдельная точка входа для страницы чека:
-// кнопка «Сохранить PDF» не делится ссылкой, а кладёт файл на устройство — и странице
-// нужно знать, получилось ли. Внутри Telegram не получилось: страница чека там вместо
-// этого открывает себя в браузере (см. `screens/ReceiptView.tsx`), а ответ 'unsupported'
-// остаётся честным для любого другого вызова.
+// кнопка «Скачать PDF» не делится ссылкой, а кладёт файл на устройство — и странице
+// нужно знать, получилось ли. Внутри WebView клиента Telegram не получилось: страница
+// чека там вместо этого открывает себя в браузере (см. `screens/ReceiptView.tsx`), а
+// ответ 'unsupported' остаётся честным для любого другого вызова. Если браузер клиента
+// загрузку отклоняет, ту же роль играет `shareReceiptPdfFile()`: системное меню отдаёт
+// файл и на iPhone, и на Android.
 export async function saveReceiptPdf(data: ReceiptData): Promise<ReceiptSaveResult> {
   if (Capacitor.isNativePlatform()) {
     await writeAndShareReceiptFile(data)
@@ -256,8 +264,8 @@ export async function saveReceiptPdf(data: ReceiptData): Promise<ReceiptSaveResu
   return 'downloaded'
 }
 
-// Запись PDF в Android-сборке: файл во временном каталоге + системное меню
-// «Поделиться», откуда его сохраняют в «Файлы» или отправляют в мессенджер.
+// Запись PDF в сборке Capacitor (Android и iOS): файл во временном каталоге + системное
+// меню «Поделиться», откуда его сохраняют в «Файлы» или отправляют в мессенджер.
 async function writeAndShareReceiptFile(data: ReceiptData): Promise<void> {
   const file = await Filesystem.writeFile({
     path: receiptFileName(data),
@@ -282,11 +290,5 @@ async function receiptLink(data: ReceiptData): Promise<ReceiptDeliveryResult> {
     throw new Error('Чек слишком длинный для ссылки — удалите лишние позиции или сохраните файл')
   }
   return { kind: 'link', url, text, shareUrl: telegramShareUrl(url, text) }
-}
-
-// Отмена системного меню — не ошибка: ничего не сломалось, пользователь просто закрыл
-// окно выбора. Остальные отказы — повод перейти на ссылку.
-function isShareCancel(error: unknown): boolean {
-  return (error as { name?: string } | null)?.name === 'AbortError'
 }
 

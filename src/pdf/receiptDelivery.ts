@@ -1,29 +1,35 @@
 // Как отдать чек: файлом или ссылкой.
 //
-// Выбор зависит не от желания, а от возможностей окружения. Telegram Mini App не
-// сохраняет файлы, созданные страницей: клиент игнорирует и blob-ссылки, и
-// `<a download>`, а `WebApp.downloadFile` принимает только адреса `https:`. Поэтому
-// там чек уходит ссылкой — её получатель открывает страницу чека в браузере и
-// сохраняет PDF. В Android-сборке (Capacitor) работает системное меню «Поделиться»,
-// в браузере — обычное скачивание файла.
+// Выбор зависит не от желания, а от возможностей клиента, и он одинаков для iPhone и
+// Android: решает не название системы, а то, что клиент умеет. Порядок один:
+//   1. 'native' — сборка Capacitor: файл пишется на устройство и уходит системным меню
+//      «Поделиться» (плагин Share работает и на Android, и на iOS);
+//   2. 'link-share' — WebView клиента Telegram: файл со страницы отдать нечем (клиент
+//      игнорирует и blob-ссылки, и `<a download>`, а `WebApp.downloadFile` принимает
+//      только адреса `https:`), поэтому чек уходит ссылкой — получатель открывает её и
+//      сохраняет PDF;
+//   3. 'file-share' — клиент умеет `navigator.share` с файлами (проверка пробным PDF):
+//      в системное меню уходит сам файл;
+//   4. 'file-download' — обычное скачивание файла браузером.
 //
 // Само правило выбора — чистая функция: её проверяют тесты, а `documents.ts` только
 // выполняет выбранный план.
 //
-// Telegram проверяется раньше Web Share API намеренно. В WebView на Android
-// `navigator.share` и `navigator.canShare` объявлены и на пробный PDF отвечают «да»,
-// но системного меню у WebView нет: промис не завершается, и нажатие «Чек (PDF)»
-// выглядело как «ничего не произошло». Ссылку же открывает сам клиент Telegram
-// (`t.me/share/url` → выбор чата), и этот путь работает и на Android, и на iOS.
+// Telegram проверяется раньше Web Share API намеренно. В WebView клиента
+// `navigator.share` и `navigator.canShare` объявлены и на пробный PDF отвечают «да», но
+// системного меню у WebView нет: промис не завершается, и нажатие «Чек (PDF)» выглядело
+// как «ничего не произошло». Ссылку же открывает сам клиент Telegram (`t.me/share/url` →
+// выбор чата) — этот путь одинаков на iPhone и Android.
 import { insideTelegramWebView, openExternalLink } from '../telegram/webapp'
 import { telegramShareUrl } from './receipt'
 
 export interface ReceiptDeliveryEnv {
-  // Приложение собрано для Android (Capacitor): файл можно записать на устройство.
+  // Приложение собрано под нативную платформу (Capacitor): файл можно записать на
+  // устройство. Плагины Filesystem и Share работают и на Android, и на iOS.
   native: boolean
   // Клиент умеет делиться файлом (Web Share API с файлами). Спрашивать об этом имеет
-  // смысл только вне Telegram: в мини-приложении на Android ответ «да» ничего не
-  // значит — меню всё равно не открывается.
+  // смысл только вне WebView клиента Telegram: там ответ «да» ничего не значит — меню
+  // всё равно не открывается.
   canShareFiles: boolean
   // Открыто внутри WebView клиента Telegram: мини-приложение или его встроенный браузер.
   telegram: boolean
@@ -51,6 +57,28 @@ export function canShareFiles(): boolean {
     return navigator.canShare({ files: [probe] })
   } catch {
     return false
+  }
+}
+
+// Куда попало «поделиться файлом»: 'shared' — системное меню открылось, 'cancelled' —
+// пользователь закрыл его сам, 'unavailable' — клиент файл отдать не может (нет Web Share
+// API или вызов отказал). На 'unavailable' вызывающий переходит к своему запасному пути —
+// ссылке или скачиванию, поэтому решение остаётся за ним.
+export type ReceiptFileTarget = 'shared' | 'cancelled' | 'unavailable'
+
+// Отдаёт готовый PDF системному меню «Поделиться». Общий путь для карточки заказа и
+// страницы чека: и там, и там файл уходит одним и тем же вызовом — и на iPhone, и на
+// Android, где системные меню устроены одинаково с точки зрения веб-страницы.
+export async function shareReceiptFile(file: File, text: string): Promise<ReceiptFileTarget> {
+  if (typeof navigator === 'undefined' || typeof navigator.share !== 'function') return 'unavailable'
+  try {
+    await navigator.share({ files: [file], title: text, text })
+    return 'shared'
+  } catch (error) {
+    // Отмена системного меню — не ошибка: пользователь закрыл окно выбора и может
+    // повторить попытку. Остальные отказы лечит вызывающий.
+    if ((error as { name?: string } | null)?.name === 'AbortError') return 'cancelled'
+    return 'unavailable'
   }
 }
 

@@ -388,12 +388,27 @@ export function OrderDetail({
                   }),
                 )
                 .then(async (result) => {
-                  // В Telegram Mini App файл отдать нельзя: клиент не сохраняет blob и
-                  // не показывает blob-ссылки, а `WebApp.downloadFile` принимает только
-                  // адреса https: — поэтому вместо PDF уходит ссылка на страницу чека.
-                  // Выбор чата открывает сам клиент Telegram (`t.me/share/url`); если
+                  // В WebView клиента Telegram файл отдать нельзя: клиент не сохраняет
+                  // blob и не показывает blob-ссылки, а `WebApp.downloadFile` принимает
+                  // только адреса https: — поэтому вместо PDF уходит ссылка на страницу
+                  // чека. Выбор чата открывает сам клиент Telegram (`t.me/share/url`); если
                   // открыть не удалось, ссылка ложится в буфер обмена, а под кнопкой
                   // остаётся «Скопировать ссылку» — тупика «ничего не произошло» нет.
+                  //
+                  // Остальные исходы — файл: системное меню (на iPhone и Android оно
+                  // однотипно), запись в сборке Capacitor или скачивание браузером.
+                  if (result.kind === 'shared' || result.kind === 'native') {
+                    setPdfNote('PDF готов — выберите, куда его сохранить или отправить.')
+                    return
+                  }
+                  if (result.kind === 'downloaded') {
+                    setPdfNote('PDF скачан в «Загрузки». Чтобы отправить его клиенту, приложите файл в чат.')
+                    return
+                  }
+                  if (result.kind === 'cancelled') {
+                    setPdfNote('Отправка отменена — можно попробовать ещё раз.')
+                    return
+                  }
                   if (result.kind !== 'link') return
                   setPdfLink({ url: result.url, text: result.text })
                   const target = await shareReceiptLink(result.url, result.text)
@@ -426,9 +441,9 @@ export function OrderDetail({
           )}
           {pdfLink && (
             <>
-              {/* Ссылку на чек клиент Telegram открывает сам, а вот файл получается
-                  только в браузере: страница чека отдаёт PDF обычным скачиванием.
-                  Кнопка открывает чек там — иначе на Android файла не получить. */}
+              {/* Ссылку на чек клиент Telegram открывает сам, а вот файл страница отдаёт
+                  только в браузере: кнопка открывает чек там — с признаком dl=1, по
+                  которому PDF скачивается сразу. Путь одинаков для iPhone и Android. */}
               <Button
                 variant="secondary"
                 size="sm"
