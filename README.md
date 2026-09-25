@@ -213,9 +213,15 @@ WEBAPP_URL=https://новый-адрес/ npm run bot:setup
 
 ### Ключ подсказок адресов
 
-`VITE_DADATA_TOKEN` в исходниках не хранится: положите его в `.env.local` перед сборкой или в
-секрет репозитория — тогда его подставит workflow. Без ключа подсказки адресов работают по
+`VITE_DADATA_TOKEN` в исходниках не хранится: положите его в `.env` или `.env.local` перед
+сборкой либо в секрет репозитория — тогда его подставит workflow. В `doc9830/selfcrm-tg` секрет
+уже задан, ключ попадает в сборку автоматически. Без ключа подсказки адресов работают по
 локальной базе. Полный список переменных — в [.env.example](./.env.example).
+
+Ключ — клиентский: в собранной странице он видим любому, кто откроет исходники бандла, поэтому
+в личном кабинете Дадаты стоит ограничить его доменом (`doc9830.github.io`) и лимитами.
+Если ключ не должен попадать в клиент вообще, нужен посредник на серверной стороне
+(Cloudflare Worker и т.п.) — подробнее в [ARCHITECTURE.md](./ARCHITECTURE.md), раздел «Ключ Дадаты и сборка».
 
 ### Что изменено по сравнению с Android-версией
 
@@ -234,5 +240,6 @@ WEBAPP_URL=https://новый-адрес/ npm run bot:setup
   сообщением, а перед заменой данных показывает состав копии и предупреждение.
 
 Устройство проекта, потоки данных и безопасность описаны в
-[ARCHITECTURE.md](./ARCHITECTURE.md) и [docs/TELEGRAM_ARCHITECTURE.md](./docs/TELEGRAM_ARCHITECTURE.md).
+[ARCHITECTURE.md](./ARCHITECTURE.md) и [docs/TELEGRAM_ARCHITECTURE.md](./docs/TELEGRAM_ARCHITECTURE.md),
+перенос новых функций Android-версии — в [docs/UPSTREAM_SYNC.md](./docs/UPSTREAM_SYNC.md).
 Сборка APK под Android (та же кодовая база) — в [ANDROID.md](./ANDROID.md).
