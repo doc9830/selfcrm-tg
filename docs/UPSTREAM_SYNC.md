@@ -32,6 +32,12 @@ node scripts/sync-from-selfcrm.mjs --upstream /tmp/selfcrm-upstream
 npm run bot -- --whatsnew
 ```
 
+Из настроек репозитория нужна одна: **Allow GitHub Actions to create and approve pull requests**
+(Settings → Actions → General → Workflow permissions) — она уже включена. Если её выключить,
+workflow не упадёт: ветка синхронизации всё равно отправится, а ссылка на создание PR появится
+в сводке запуска. CI на таком PR GitHub может пометить как `action_required` (нужно подтверждение
+запуска) — поэтому типы, тесты и сборка выполняются внутри самой синхронизации, до публикации ветки.
+
 ## 1. Замер: что совпадает, а что нет
 
 | | |
