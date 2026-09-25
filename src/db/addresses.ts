@@ -80,17 +80,24 @@ export function searchAddresses(
     .map((s) => s.entry)
 }
 
-// Загружает пользовательскую базу адресов или возвращает демо-набор.
-export function loadAddresses(store: KVStore = localStorageStore): AddressEntry[] {
+// Пользовательская база адресов или null, если её не загружали (тогда работает демо-набор).
+// Нужна там, где важно отличить свою базу от демонстрационной: например, в резервную
+// копию попадает только своя — иначе демо-записи разошлись бы по файлам пользователей.
+export function readUserAddresses(store: KVStore = localStorageStore): AddressEntry[] | null {
   const raw = store.getItem(ADDRESSES_KEY)
-  if (!raw) return demoAddresses
+  if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as AddressEntry[]
     if (Array.isArray(parsed)) return parsed
   } catch {
     // повреждённые данные игнорируем
   }
-  return demoAddresses
+  return null
+}
+
+// Загружает пользовательскую базу адресов или возвращает демо-набор.
+export function loadAddresses(store: KVStore = localStorageStore): AddressEntry[] {
+  return readUserAddresses(store) ?? demoAddresses
 }
 
 export function saveAddresses(list: AddressEntry[], store: KVStore = localStorageStore): void {

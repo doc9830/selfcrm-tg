@@ -1,12 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Card, Field, Input, IntegerInput, PhoneInput, cx } from '../components/ui'
+import { Button, Card, Field, Input, IntegerInput, Modal, PhoneInput, cx } from '../components/ui'
 import { Icon } from '../components/Icons'
-import { downloadBackup, downloadJson, readBackupFile, restoreBackup } from '../db/backup'
-import { describeBackup } from '../db/backupFormat'
+import { applyBackup, downloadBackup, downloadJson, hasLocalData, readBackupFile } from '../db/backup'
+import {
+  backupFileName,
+  describeCounts,
+  parseBackup,
+  summarizeBackup,
+  type BackupSummary,
+  type ParsedBackup,
+} from '../db/backupFormat'
 import { parseAddresses, saveAddresses } from '../db/addresses'
 import { seedDemo } from '../db/seed'
 import { useData } from '../state/DataContext'
 import { useTheme } from '../state/ThemeContext'
+import { openBotChat } from '../telegram/webapp'
 import { emptyContractor, type Contractor } from '../types'
 import { INN_LENGTHS, KPP_LENGTHS, OGRN_LENGTHS, hasValidDigitLength, isPhoneValid } from '../utils/input'
 import { Capacitor } from '@capacitor/core'
@@ -35,6 +43,21 @@ type UpdateState =
       error?: string
     }
 
+// Состояние восстановления из файла: сначала показываем, что лежит в копии, и только
+// после подтверждения пользователя заменяем данные.
+type RestoreState =
+  | { status: 'idle' }
+  | { status: 'invalid'; fileName: string; message: string }
+  | {
+      status: 'ready'
+      fileName: string
+      parsed: ParsedBackup
+      summary: BackupSummary
+      busy: boolean
+      error?: string
+    }
+  | { status: 'done'; summary: BackupSummary }
+
 export function Settings() {
   const { db, refresh } = useData()
   const { theme, toggleTheme } = useTheme()
@@ -44,6 +67,9 @@ export function Settings() {
   const updatesRef = useRef<HTMLDivElement>(null)
   const autoCheckedRef = useRef(false)
   const [update, setUpdate] = useState<UpdateState>({ status: 'idle' })
+  const [restore, setRestore] = useState<RestoreState>({ status: 'idle' })
+  // Результат создания копии: пользователю важно прочитать имя файла и что с ним делать.
+  const [backupNote, setBackupNote] = useState<string | null>(null)
   // Переход из уведомления о новой версии: «/settings?section=updates».
   const highlightUpdates = route.query.get('section') === 'updates'
 
@@ -113,17 +139,72 @@ export function Settings() {
     }
   }
 
+  // Создание копии: файл скачивается на устройство, дальше пользователь сам решает, где его
+  // хранить. В Telegram приложение предлагает отправить файл в чат с ботом (см. ниже).
+  const handleExport = async () => {
+    setBackupNote(null)
+    try {
+      await downloadBackup(db)
+      setBackupNote(`Копия сохранена: ${backupFileName()}`)
+    } catch (e) {
+      setBackupNote(e instanceof Error ? e.message : 'Не удалось сохранить файл')
+    }
+  }
+
+  // Файл читается и проверяется сразу, но данные не меняются: сначала показываем, что в копии,
+  // и ждём подтверждения. Ошибка разбора — понятное сообщение вместо падения приложения.
   const handleImport = async (file: File | undefined) => {
     if (!file) return
     try {
       const json = await readBackupFile(file)
-      const backup = restoreBackup(db, json)
-      refresh()
-      window.alert(`Данные восстановлены из резервной копии.\n${describeBackup(backup)}`)
+      const parsed = parseBackup(json)
+      setRestore({
+        status: 'ready',
+        fileName: file.name,
+        parsed,
+        summary: summarizeBackup(parsed),
+        busy: false,
+      })
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Не удалось импортировать данные')
+      setRestore({
+        status: 'invalid',
+        fileName: file.name,
+        message: e instanceof Error ? e.message : 'Не удалось прочитать файл',
+      })
     }
   }
+
+  // Подтверждённое восстановление. `backupFirst` — кнопка «Создать backup и продолжить»:
+  // копия текущих данных скачивается до замены, поэтому импорт не оставляет без данных.
+  const runRestore = async (parsed: ParsedBackup, backupFirst: boolean) => {
+    setRestore((prev) => (prev.status === 'ready' ? { ...prev, busy: true, error: undefined } : prev))
+    try {
+      if (backupFirst) await downloadBackup(db)
+      const restored = applyBackup(db, parsed)
+      refresh()
+      setRestore({ status: 'done', summary: summarizeBackup(restored) })
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Не удалось восстановить данные'
+      setRestore((prev) => (prev.status === 'ready' ? { ...prev, busy: false, error: message } : prev))
+    }
+  }
+
+  // Пока восстановление идёт, окно не закрывается: операция уже началась.
+  const closeRestore = () => {
+    if (restore.status === 'ready' && restore.busy) return
+    setRestore({ status: 'idle' })
+  }
+
+  // Замена этих данных необратима, поэтому предупреждение показывается только тогда,
+  // когда в базе действительно есть что терять.
+  const willReplace = restore.status === 'ready' && hasLocalData(db)
+  // Подпись кнопки подтверждения: если данные будут заменены, предлагаем сначала копию.
+  const restoreActionLabel =
+    restore.status === 'ready' && restore.busy
+      ? 'Восстановление…'
+      : willReplace
+        ? 'Создать backup и продолжить'
+        : 'Восстановить'
 
   // Сохранение файла: начинается скачивание — в Telegram файл попадает в загрузки
   // устройства (им можно поделиться или отправить себе), в браузере — в «Загрузки».
@@ -250,32 +331,38 @@ export function Settings() {
           Резервная копия
         </div>
         <div className="settings-row-desc" style={{ marginBottom: 12 }}>
-          Ваши данные хранятся на этом устройстве. Делайте резервные копии, чтобы не потерять
-          данные при смене устройства.
+          Данные CRM хранятся на этом устройстве. Чтобы не потерять их при очистке данных
+          Telegram или смене устройства, регулярно создавайте резервные копии. Копию можно
+          сохранить в Telegram и восстановить на другом устройстве.
         </div>
         <div className="settings-row">
           <div>
-            <div className="settings-row-title">Экспорт</div>
+            <div className="settings-row-title">Создать резервную копию</div>
             <div className="settings-row-desc">
-              Скачать все данные в JSON-файл. Сохраните его или отправьте себе в Telegram —
-              из копии данные восстановятся на другом устройстве
+              Сохраняет все данные CRM в один файл: клиенты, товары, заказы с напоминаниями,
+              история склада и реквизиты
             </div>
           </div>
           <Button
             size="sm"
             variant="secondary"
             icon="download"
-            onClick={() => void runExport(() => downloadBackup(db))}
+            onClick={() => void handleExport()}
           >
-            Скачать
+            Создать
           </Button>
         </div>
+        {backupNote && (
+          <div className="settings-row-desc" style={{ marginBottom: 4 }}>
+            {backupNote}
+          </div>
+        )}
         <div className="settings-row">
           <div>
-            <div className="settings-row-title">Импорт</div>
+            <div className="settings-row-title">Восстановить из файла</div>
             <div className="settings-row-desc">
-              Восстановить данные из файла — текущее состояние сохраняется. Подходит и копия,
-              сделанная в приложении для Android
+              Восстанавливает CRM из ранее созданной копии. Перед заменой данных приложение
+              покажет, что в файле. Подходит и копия из Android-сборки SelfCRM
             </div>
           </div>
           <Button
@@ -284,7 +371,19 @@ export function Settings() {
             icon="upload"
             onClick={() => fileRef.current?.click()}
           >
-            Загрузить
+            Выбрать файл
+          </Button>
+        </div>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-title">Хранить копию в Telegram</div>
+            <div className="settings-row-desc">
+              Отправьте файл копии в чат с ботом — он останется в истории чата и его можно
+              будет скачать на новом устройстве
+            </div>
+          </div>
+          <Button size="sm" variant="secondary" icon="telegram" onClick={() => openBotChat()}>
+            Чат с ботом
           </Button>
         </div>
         {db.hasPreImportBackup() && (
@@ -476,10 +575,116 @@ export function Settings() {
         </div>
       </Card>
 
+      {restore.status !== 'idle' && (
+        <Modal
+          title={
+            restore.status === 'invalid'
+              ? 'Файл не подходит'
+              : restore.status === 'done'
+                ? 'Данные восстановлены'
+                : 'Восстановление из копии'
+          }
+          onClose={closeRestore}
+        >
+          {restore.status === 'invalid' && (
+            <>
+              <div className="limit-banner limit-banner-danger" style={{ marginBottom: 0 }}>
+                <span className="limit-banner-icon">
+                  <Icon name="alert" size={18} />
+                </span>
+                <span className="limit-banner-text">{restore.message}</span>
+              </div>
+              <div className="field-hint" style={{ marginTop: 10 }}>
+                Файл: {restore.fileName}
+              </div>
+              <div className="form-actions" style={{ marginTop: 16 }}>
+                <Button variant="secondary" onClick={closeRestore}>
+                  Понятно
+                </Button>
+              </div>
+            </>
+          )}
+
+          {restore.status === 'ready' && (
+            <>
+              <div className="settings-row-title">{restore.summary.label}</div>
+              <div className="settings-row-desc" style={{ marginTop: 4 }}>
+                {describeCounts(restore.summary.counts)}
+              </div>
+              {restore.summary.appVersion !== null && (
+                <div className="settings-row-desc">
+                  Версия приложения: {restore.summary.appVersion}
+                </div>
+              )}
+              {restore.summary.legacy && (
+                <div className="settings-row-desc">
+                  Файл старого образца — такие копии SelfCRM тоже понимает
+                </div>
+              )}
+              <div className="field-hint" style={{ marginTop: 10 }}>
+                Файл: {restore.fileName}
+              </div>
+
+              {willReplace && (
+                <div className="limit-banner" style={{ marginTop: 14, marginBottom: 0 }}>
+                  <span className="limit-banner-icon">
+                    <Icon name="alert" size={18} />
+                  </span>
+                  <span className="limit-banner-text">
+                    Восстановление заменит текущие данные CRM. Перед продолжением рекомендуется
+                    создать резервную копию текущих данных.
+                  </span>
+                </div>
+              )}
+
+              {restore.error && (
+                <div
+                  className="limit-banner limit-banner-danger"
+                  style={{ marginTop: 14, marginBottom: 0 }}
+                >
+                  <span className="limit-banner-icon">
+                    <Icon name="alert" size={18} />
+                  </span>
+                  <span className="limit-banner-text">{restore.error}</span>
+                </div>
+              )}
+
+              <div className="form-actions" style={{ marginTop: 16 }}>
+                <Button variant="secondary" disabled={restore.busy} onClick={closeRestore}>
+                  Отмена
+                </Button>
+                <Button
+                  variant="primary"
+                  disabled={restore.busy}
+                  onClick={() => void runRestore(restore.parsed, willReplace)}
+                >
+                  {restoreActionLabel}
+                </Button>
+              </div>
+            </>
+          )}
+
+          {restore.status === 'done' && (
+            <>
+              <div className="settings-row-title">CRM восстановлена из резервной копии</div>
+              <div className="settings-row-desc" style={{ marginTop: 4 }}>
+                {restore.summary.label}
+              </div>
+              <div className="settings-row-desc">{describeCounts(restore.summary.counts)}</div>
+              <div className="form-actions" style={{ marginTop: 16 }}>
+                <Button variant="primary" onClick={closeRestore}>
+                  Готово
+                </Button>
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
+
       <input
         ref={fileRef}
         type="file"
-        accept="application/json,.json"
+        accept="application/json,.json,.txt,text/plain"
         style={{ display: 'none' }}
         onChange={(e) => {
           void handleImport(e.target.files?.[0])

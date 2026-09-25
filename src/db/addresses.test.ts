@@ -3,6 +3,7 @@ import {
   demoAddresses,
   loadAddresses,
   parseAddresses,
+  readUserAddresses,
   saveAddresses,
   searchAddresses,
 } from './addresses'
@@ -42,6 +43,24 @@ describe('loadAddresses / saveAddresses / parseAddresses', () => {
     const custom = [{ id: 'x1', cadastralNumber: '1:1:1', address: 'Тест', lat: 1, lng: 2 }]
     saveAddresses(custom, store)
     expect(loadAddresses(store)).toEqual(custom)
+  })
+
+  it('различает свою базу адресов и демо-набор', () => {
+    const store = new MemoryStore()
+    // Своей базы нет — и в резервную копию попадёт именно это отличие (null).
+    expect(readUserAddresses(store)).toBeNull()
+
+    const custom = [{ id: 'x1', cadastralNumber: '1:1:1', address: 'Тест', lat: 1, lng: 2 }]
+    saveAddresses(custom, store)
+    expect(readUserAddresses(store)).toEqual(custom)
+    expect(loadAddresses(store)).toEqual(custom)
+  })
+
+  it('игнорирует повреждённое значение пользовательской базы', () => {
+    const store = new MemoryStore()
+    store.setItem('selfcrm:addresses', 'не json')
+    expect(readUserAddresses(store)).toBeNull()
+    expect(loadAddresses(store)).toEqual(demoAddresses)
   })
 
   it('парсит и валидирует JSON-массив', () => {

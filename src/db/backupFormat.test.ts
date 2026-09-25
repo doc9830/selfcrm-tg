@@ -5,10 +5,13 @@ import type { Client } from '../types'
 import {
   BACKUP_FORMAT,
   BACKUP_FORMAT_VERSION,
+  applyFormatMigrations,
   backupFileName,
   buildBackupJson,
   describeBackup,
+  describeCounts,
   parseBackup,
+  summarizeBackup,
 } from './backupFormat'
 import { Database } from './database'
 import { MemoryStore } from './kvstore'
@@ -58,6 +61,7 @@ describe('backupFormat: формат файла резервной копии', 
     expect(file.format).toBe(BACKUP_FORMAT)
     expect(file.version).toBe(BACKUP_FORMAT_VERSION)
     expect(file.createdAt).toBe('2026-02-03T04:05:06.000Z')
+    expect(file.appVersion).toBe(APP_VERSION)
     expect(file.app.version).toBe(APP_VERSION)
     expect(file.data.clients).toHaveLength(1)
     expect(file.data.clients[0].name).toBe('Иван Петров')
@@ -97,7 +101,78 @@ describe('backupFormat: формат файла резервной копии', 
 
   it('сообщает понятную ошибку на постороннем файле', () => {
     expect(() => parseBackup('не json')).toThrow('Файл резервной копии не читается')
-    expect(() => parseBackup('{"hello": 1}')).toThrow('Некорректный файл резервной копии')
+    expect(() => parseBackup('{"hello": 1}')).toThrow('В файле нет данных CRM')
+    expect(() => parseBackup('[1, 2, 3]')).toThrow('ожидался объект JSON')
+  })
+
+  it('отказывается читать файл другой программы', () => {
+    const json = JSON.stringify({ format: 'other-crm', version: 1, data: { clients: [] } })
+    expect(() => parseBackup(json)).toThrow('не файл резервной копии SelfCRM')
+  })
+
+  it('требует обязательные коллекции: без них база восстановилась бы пустой', () => {
+    expect(() =>
+      parseBackup(JSON.stringify({ format: BACKUP_FORMAT, version: 1, data: { orders: [] } })),
+    ).toThrow('нет списка клиентов')
+    expect(() =>
+      parseBackup(JSON.stringify({ format: BACKUP_FORMAT, version: 1, data: { clients: [] } })),
+    ).toThrow('нет списка заказов')
+    expect(() =>
+      parseBackup(
+        JSON.stringify({ format: BACKUP_FORMAT, version: 1, data: { clients: [], orders: {} } }),
+      ),
+    ).toThrow('повреждён список заказов')
+  })
+
+  it('находит повреждённые записи в копии', () => {
+    const broken = (data: Record<string, unknown>) =>
+      parseBackup(JSON.stringify({ format: BACKUP_FORMAT, version: 1, data }))
+
+    expect(() => broken({ clients: ['строка'], orders: [] })).toThrow('повреждена запись: Клиент №1')
+    expect(() => broken({ clients: [{ name: 'Без id' }], orders: [] })).toThrow(
+      'Клиент №1 — нет идентификатора',
+    )
+    expect(() => broken({ clients: [], orders: [{ id: 'o1' }] })).toThrow(
+      'повреждён заказ №1: нет списка позиций',
+    )
+    expect(() =>
+      broken({ clients: [], orders: [], settings: 'и не настройки вовсе' }),
+    ).toThrow('повреждены настройки CRM')
+  })
+
+  it('отклоняет непонятную версию формата вместо падения', () => {
+    const json = JSON.stringify({
+      format: BACKUP_FORMAT,
+      version: 'два',
+      data: { clients: [], orders: [] },
+    })
+    expect(() => parseBackup(json)).toThrow('непонятная версия формата')
+  })
+
+  it('переносит копию v1 через миграции формата без изменений', () => {
+    const data = { clients: [], orders: [], markup: 'своё поле' }
+    // Пока формат один: единственный шаг — версия 1 в версию 1. Место для будущих
+    // v1 → v2 проверим на том, что функция вообще вызывается и данные не теряются.
+    expect(applyFormatMigrations(data, 1)).toEqual(data)
+    expect(applyFormatMigrations(data, null)).toEqual(data)
+  })
+
+  it('показывает состав копии перед восстановлением', () => {
+    const db = new Database(new MemoryStore())
+    db.saveClient(makeClient())
+    const order = db.createOrderDraft('c1')
+    order.items = [{ productId: null, name: 'Работа', price: 100, qty: 1 }]
+    db.saveOrder(order)
+    db.addReminder(order.id, { kind: 'call', text: 'Позвонить', dueAt: '2026-03-01T10:00:00.000Z' })
+
+    const parsed = parseBackup(buildBackupJson(db, new Date('2026-02-03T04:05:06.000Z')))
+    const summary = summarizeBackup(parsed)
+
+    expect(summary.counts).toMatchObject({ clients: 1, products: 0, orders: 1, reminders: 1 })
+    expect(describeCounts(summary.counts)).toContain('Клиентов: 1')
+    expect(describeCounts(summary.counts)).toContain('Напоминаний: 1')
+    // Пустые разделы в подписи не упоминаются: пользователю важен состав копии.
+    expect(describeCounts(summary.counts)).not.toContain('Адресов')
   })
 
   it('подписывает копию Telegram-пользователем, не делая его ключом данных', () => {
@@ -120,7 +195,7 @@ describe('backupFormat: формат файла резервной копии', 
 
   it('формирует имя файла копии с датой и временем', () => {
     expect(backupFileName(new Date('2026-02-03T04:05:06.000Z'))).toBe(
-      'selfcrm-backup-2026-02-03-04-05-06.json',
+      'SelfCRM_backup_2026-02-03_04-05.json',
     )
   })
 })

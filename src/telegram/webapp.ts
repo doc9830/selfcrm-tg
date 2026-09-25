@@ -75,6 +75,8 @@ export interface TelegramWebApp {
   close(): void
   setHeaderColor?(color: string): void
   setBackgroundColor?(color: string): void
+  // Открывает чат Telegram внутри клиента (t.me-ссылки в WebView иначе уводят в браузер).
+  openTelegramLink?(url: string): void
   onEvent(event: string, handler: () => void): void
   offEvent(event: string, handler: () => void): void
 }
@@ -109,4 +111,20 @@ export function getTelegramUserLabel(): string | null {
   if (!user) return null
   const name = [user.first_name, user.last_name].filter(Boolean).join(' ').trim()
   return name || user.username || null
+}
+
+// Чат с ботом, куда пользователь сам отправляет файл резервной копии. Ни токена, ни
+// идентификаторов тут нет — это обычная публичная ссылка, её можно показать и в браузере.
+export const TELEGRAM_BOT_URL = 'https://t.me/fastcrm_bot'
+
+// Открывает чат с ботом: в Telegram — средствами клиента (WebApp.openTelegramLink),
+// в браузере — обычной новой вкладкой. Ошибки не показываем: если браузер заблокировал
+// переход, пользователь сам найдёт бота по имени @fastcrm_bot.
+export function openBotChat(url: string = TELEGRAM_BOT_URL): void {
+  const app = getTelegramWebApp()
+  if (app?.openTelegramLink) {
+    app.openTelegramLink(url)
+    return
+  }
+  if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer')
 }
