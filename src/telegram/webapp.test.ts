@@ -7,7 +7,7 @@ vi.mock('@capacitor/core', () => ({
   Capacitor: { isNativePlatform: () => capacitor.native },
 }))
 
-import { openBotChat, TELEGRAM_BOT_URL, type TelegramWebApp } from './webapp'
+import { openBotChat, openExternalLink, TELEGRAM_BOT_URL, type TelegramWebApp } from './webapp'
 
 afterEach(() => {
   capacitor.native = false
@@ -31,6 +31,35 @@ function stubWindow(webApp?: Partial<TelegramWebApp>, openResult: unknown = {}) 
 describe('TELEGRAM_BOT_URL', () => {
   it('ведёт в чат с ботом @fastcrm_bot', () => {
     expect(TELEGRAM_BOT_URL).toBe('https://t.me/fastcrm_bot')
+  })
+})
+
+describe('openExternalLink', () => {
+  it('ссылку t.me открывает как чат Telegram', () => {
+    const openTelegramLink = vi.fn()
+    const openLink = vi.fn()
+    stubWindow({ initData: 'query_id=1', platform: 'android', openTelegramLink, openLink })
+
+    expect(openExternalLink('https://t.me/fastcrm_bot')).toBe('telegram')
+    expect(openTelegramLink).toHaveBeenCalledWith('https://t.me/fastcrm_bot')
+    expect(openLink).not.toHaveBeenCalled()
+  })
+
+  it('обычную ссылку (маршрут, мессенджер) открывает через openLink', () => {
+    const openTelegramLink = vi.fn()
+    const openLink = vi.fn()
+    stubWindow({ initData: 'query_id=1', platform: 'android', openTelegramLink, openLink })
+
+    expect(openExternalLink('https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto')).toBe('telegram')
+    expect(openLink).toHaveBeenCalledWith('https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto')
+    expect(openTelegramLink).not.toHaveBeenCalled()
+  })
+
+  it('вне Telegram открывает внешнюю ссылку в новой вкладке', () => {
+    const calls = stubWindow()
+
+    expect(openExternalLink('https://wa.me/79001112233')).toBe('browser')
+    expect(calls).toEqual([{ url: 'https://wa.me/79001112233', target: '_blank' }])
   })
 })
 

@@ -52,6 +52,26 @@ export interface TelegramBackButton {
   offClick(callback: () => void): void
 }
 
+// Облачное хранилище Telegram (Bot API 6.9+). Значения лежат не на устройстве, а в
+// облаке аккаунта Telegram, поэтому переживают очистку данных клиента и доступны на
+// другом телефоне. Так же устроены и другие методы клиента: результат отдаётся в
+// callback (error, result), а не промисом — промисную обёртку см. в src/telegram/cloudStorage.ts.
+//
+// Ограничения клиента: не больше 1024 ключей и не больше 4096 символов в значении.
+export type TelegramCloudCallback<T> = (error: string | null, result?: T) => void
+
+export interface TelegramCloudStorage {
+  setItem(key: string, value: string, callback?: TelegramCloudCallback<boolean>): TelegramCloudStorage
+  getItem(key: string, callback?: TelegramCloudCallback<string>): TelegramCloudStorage
+  getItems(
+    keys: string[],
+    callback?: TelegramCloudCallback<Record<string, string>>,
+  ): TelegramCloudStorage
+  removeItem(key: string, callback?: TelegramCloudCallback<boolean>): TelegramCloudStorage
+  removeItems(keys: string[], callback?: TelegramCloudCallback<boolean>): TelegramCloudStorage
+  getKeys(callback?: TelegramCloudCallback<string[]>): TelegramCloudStorage
+}
+
 export interface TelegramHapticFeedback {
   impactOccurred(style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft'): void
   notificationOccurred(type: 'error' | 'success' | 'warning'): void
@@ -72,6 +92,9 @@ export interface TelegramWebApp {
   backgroundColor: string
   BackButton: TelegramBackButton
   HapticFeedback?: TelegramHapticFeedback
+  // Есть только в клиентах Bot API 6.9+ и только в Telegram: вне мини-приложения
+  // облака нет, поэтому все вызовы сначала проверяют наличие (см. cloudStorageSupported).
+  CloudStorage?: TelegramCloudStorage
   ready(): void
   expand(): void
   close(): void
@@ -127,17 +150,27 @@ export const TELEGRAM_BOT_URL = 'https://t.me/fastcrm_bot'
 // сказать об этом текстом: иначе нажатие выглядит как «ничего не произошло».
 export type BotChatTarget = 'telegram' | 'system' | 'browser' | 'failed'
 
-// Открывает чат с ботом.
+// Ссылка на чат/канал Telegram: только такие адреса клиент умеет открывать внутри себя.
+function isTelegramLink(url: string): boolean {
+  try {
+    return new URL(url).hostname.toLowerCase() === 't.me'
+  } catch {
+    return false
+  }
+}
+
+// Открывает внешнюю ссылку (чат с ботом, маршрут в картах, переписку в мессенджере).
 //
-// В Telegram Mini App это делает сам клиент через `openTelegramLink`: обычные `window.open`
-// и клики по ссылкам внутри WebView-мини-приложения игнорируются, поэтому раньше нажатие
-// заканчивалось только вибрацией. В Android-сборке (Capacitor) работает только `_system`:
-// с ним ссылка уходит операционной системе, и её открывает приложение Telegram.
-// В браузере — обычная новая вкладка.
-export function openBotChat(url: string = TELEGRAM_BOT_URL): BotChatTarget {
+// В Telegram Mini App это делает сам клиент: обычные `window.open` и клики по ссылкам
+// внутри WebView-мини-приложения игнорируются, поэтому раньше нажатия заканчивались только
+// вибрацией. Ссылки `t.me` открываются через `openTelegramLink` (чат — внутри клиента),
+// все остальные — через `openLink` (браузер или приложение, зарегистрированное на ссылку).
+// В Android-сборке (Capacitor) работает только `_system`: с ним ссылка уходит операционной
+// системе. В браузере — обычная новая вкладка.
+export function openExternalLink(url: string): BotChatTarget {
   const app = getTelegramWebApp()
   if (isTelegramEnvironment()) {
-    if (app?.openTelegramLink) {
+    if (isTelegramLink(url) && app?.openTelegramLink) {
       app.openTelegramLink(url)
       return 'telegram'
     }
@@ -153,4 +186,9 @@ export function openBotChat(url: string = TELEGRAM_BOT_URL): BotChatTarget {
   }
   const opened = window.open(url, '_blank', 'noopener,noreferrer')
   return opened ? 'browser' : 'failed'
+}
+
+// Открывает чат с ботом (частный случай внешней ссылки).
+export function openBotChat(url: string = TELEGRAM_BOT_URL): BotChatTarget {
+  return openExternalLink(url)
 }

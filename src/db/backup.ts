@@ -13,14 +13,14 @@ import { backupFileName, buildBackupJson, parseBackup, type ParsedBackup } from 
  * ссылке `<a download>`, поэтому раньше нажатие «Скачать» ничего не делало.
  * Так же формируется PDF-чек (см. src/pdf/documents.ts).
  *
- * В Telegram Mini App работает тот же путь, что и в браузере: клиент Telegram сохраняет
- * файл из blob-ссылки. Метод WebApp.downloadFile здесь не подходит намеренно — он
- * принимает только адреса `https:` (проверка `a.protocol != 'https:'` в
- * telegram-web-app.js), а данные CRM лежат на устройстве и наружу не отдаются.
+ * В Telegram Mini App этот путь не работает: клиент игнорирует и `<a download>`, и blob-ссылки
+ * (`WebApp.downloadFile` принимает только адреса `https:`). Поэтому копия в мини-приложении
+ * хранится в облаке Telegram — см. `src/db/cloudBackup.ts`, кнопки в настройках.
  *
- * Дальше файл хранит сам пользователь: он отправляет его в чат с ботом (см. `openBotChat`
- * в `src/telegram/webapp.ts`), и копия остаётся в истории чата. Никакой автоматики здесь
- * нет и быть не может: Mini App не имеет доступа к истории сообщений.
+ * Дальше файл хранит сам пользователь: в браузере он попадает в «Загрузки», на Android —
+ * в системное меню «Поделиться», откуда копию можно отправить себе в чат с ботом
+ * (см. `openBotChat` в `src/telegram/webapp.ts`). Никакой автоматики здесь нет и быть не
+ * может: Mini App не имеет доступа к истории сообщений.
  */
 export async function downloadJson(json: string, fileName: string): Promise<void> {
   if (Capacitor.isNativePlatform()) {

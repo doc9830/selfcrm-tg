@@ -11,6 +11,14 @@ import {
   type ParsedBackup,
 } from '../db/backupFormat'
 import { parseAddresses, saveAddresses } from '../db/addresses'
+import {
+  cloudBackupAvailability,
+  readCloudBackup,
+  readCloudBackupInfo,
+  removeCloudBackup,
+  saveCloudBackup,
+  type CloudBackupInfo,
+} from '../db/cloudBackup'
 import { seedDemo } from '../db/seed'
 import { useData } from '../state/DataContext'
 import { useTheme } from '../state/ThemeContext'
@@ -27,6 +35,27 @@ const isDev = import.meta.env.DEV
 // Метка времени для имён скачиваемых файлов (как в src/db/backup.ts).
 function fileStamp(): string {
   return new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+}
+
+// Дата облачной копии для подписи в настройках: «25.09.2026, 12:30».
+function cloudDateLabel(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return 'дата неизвестна'
+  return date.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+// Объём копии для подписи: в облаке видно, сколько занимает копия.
+function sizeLabel(bytes: number): string {
+  if (bytes <= 0) return ''
+  if (bytes < 1024) return `${bytes} Б`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} КБ`
+  return `${Math.round(bytes / (1024 * 102.4)) / 10} МБ`
 }
 
 type UpdateState =
@@ -70,6 +99,20 @@ export function Settings() {
   const [restore, setRestore] = useState<RestoreState>({ status: 'idle' })
   // Результат создания копии: пользователю важно прочитать имя файла и что с ним делать.
   const [backupNote, setBackupNote] = useState<string | null>(null)
+  // Копия в облаке Telegram (WebApp.CloudStorage): доступна только в мини-приложении.
+  // Метаданные показываются в разделе «Резервная копия», поэтому читаются при открытии
+  // настроек и обновляются после каждого сохранения, восстановления и удаления.
+  const [cloudInfo, setCloudInfo] = useState<CloudBackupInfo | null>(null)
+  const [cloudNote, setCloudNote] = useState<string | null>(null)
+  // Что сейчас происходит с облаком: кнопки блокируются, а подпись нажатой кнопки меняется —
+  // сохранение крупной копии идёт частями и занимает несколько секунд.
+  const [cloudBusy, setCloudBusy] = useState<'save' | 'restore' | 'remove' | null>(null)
+  // Облако есть только в мини-приложении Telegram и только в клиентах Bot API 6.9+:
+  // от этого зависит, какой способ копии показывать (см. src/db/cloudBackup.ts).
+  // Причина недоступности выводится в разделе текстом, чтобы отсутствие кнопок не выглядело
+  // как пропавшая функция: 'old-client' — обновить Telegram, 'outside-telegram' — открыть из бота.
+  const cloudAvailability = cloudBackupAvailability()
+  const cloudAvailable = cloudAvailability === 'ready'
   // Переход из уведомления о новой версии: «/settings?section=updates».
   const highlightUpdates = route.query.get('section') === 'updates'
 
@@ -110,6 +153,26 @@ export function Settings() {
     void checkUpdates()
   }, [highlightUpdates, checkUpdates])
 
+  // Состояние облачной копии при открытии настроек: пользователь должен видеть, есть ли
+  // копия и от какого числа, не нажимая кнопок.
+  useEffect(() => {
+    if (!cloudAvailable) return
+    let alive = true
+    void (async () => {
+      try {
+        const info = await readCloudBackupInfo()
+        if (alive) setCloudInfo(info)
+      } catch (e) {
+        if (alive) {
+          setCloudNote(e instanceof Error ? e.message : 'Не удалось прочитать копию из облака')
+        }
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [cloudAvailable])
+
   const startUpdate = async (release: ReleaseInfo) => {
     const apkUrl = release.apkUrl
     if (!apkUrl || !Capacitor.isNativePlatform()) {
@@ -139,8 +202,9 @@ export function Settings() {
     }
   }
 
-  // Создание копии: файл скачивается на устройство, дальше пользователь сам решает, где его
-  // хранить. В Telegram приложение предлагает отправить файл в чат с ботом (см. ниже).
+  // Создание копии файлом: файл скачивается на устройство, дальше пользователь сам решает, где его
+  // хранить. Кнопка есть только там, где скачивание работает (браузер, Android-сборка): в мини-приложении
+  // Telegram клиент файлы страницы не сохраняет, и там копию делает облако (см. handleCloudSave).
   const handleExport = async () => {
     setBackupNote(null)
     try {
@@ -175,6 +239,62 @@ export function Settings() {
     }
   }
 
+  // Копия в облаке Telegram: данные уходят в облако аккаунта, а не на устройство, поэтому
+  // копию можно восстановить на другом телефоне (см. src/db/cloudBackup.ts).
+  const handleCloudSave = async () => {
+    setCloudNote(null)
+    setCloudBusy('save')
+    try {
+      const info = await saveCloudBackup(db)
+      setCloudInfo(info)
+      setCloudNote(`Копия сохранена в облаке Telegram: ${describeCounts(info.counts)}`)
+    } catch (e) {
+      setCloudNote(e instanceof Error ? e.message : 'Не удалось сохранить копию в облаке')
+    } finally {
+      setCloudBusy(null)
+    }
+  }
+
+  // Восстановление из облака идёт через тот же показ состава копии, что и импорт файла:
+  // данные заменяются только после подтверждения пользователя.
+  const handleCloudRestore = async () => {
+    setCloudNote(null)
+    setCloudBusy('restore')
+    try {
+      const { info, parsed } = await readCloudBackup()
+      setCloudInfo(info)
+      setRestore({
+        status: 'ready',
+        fileName: info.fileName,
+        parsed,
+        summary: summarizeBackup(parsed),
+        busy: false,
+      })
+    } catch (e) {
+      setCloudNote(e instanceof Error ? e.message : 'Не удалось прочитать копию из облака')
+    } finally {
+      setCloudBusy(null)
+    }
+  }
+
+  const handleCloudRemove = async () => {
+    const confirmed = window.confirm(
+      'Удалить копию из облака Telegram? Данные на этом устройстве останутся на месте',
+    )
+    if (!confirmed) return
+    setCloudNote(null)
+    setCloudBusy('remove')
+    try {
+      await removeCloudBackup()
+      setCloudInfo(null)
+      setCloudNote('Копия удалена из облака Telegram')
+    } catch (e) {
+      setCloudNote(e instanceof Error ? e.message : 'Не удалось удалить копию из облака')
+    } finally {
+      setCloudBusy(null)
+    }
+  }
+
   // Файл читается и проверяется сразу, но данные не меняются: сначала показываем, что в копии,
   // и ждём подтверждения. Ошибка разбора — понятное сообщение вместо падения приложения.
   const handleImport = async (file: File | undefined) => {
@@ -198,12 +318,22 @@ export function Settings() {
     }
   }
 
+  // Копия перед заменой данных: в мини-приложении Telegram — в облако (файл там сохранить
+  // нельзя, это и есть причина облачной копии), в браузере и Android-сборке — файлом.
+  const backupBeforeReplace = async () => {
+    if (!cloudAvailable) {
+      await downloadBackup(db)
+      return
+    }
+    setCloudInfo(await saveCloudBackup(db))
+  }
+
   // Подтверждённое восстановление. `backupFirst` — кнопка «Создать backup и продолжить»:
-  // копия текущих данных скачивается до замены, поэтому импорт не оставляет без данных.
+  // копия текущих данных сохраняется до замены, поэтому импорт не оставляет без данных.
   const runRestore = async (parsed: ParsedBackup, backupFirst: boolean) => {
     setRestore((prev) => (prev.status === 'ready' ? { ...prev, busy: true, error: undefined } : prev))
     try {
-      if (backupFirst) await downloadBackup(db)
+      if (backupFirst) await backupBeforeReplace()
       const restored = applyBackup(db, parsed)
       refresh()
       setRestore({ status: 'done', summary: summarizeBackup(restored) })
@@ -356,37 +486,133 @@ export function Settings() {
         </div>
         <div className="settings-row-desc" style={{ marginBottom: 12 }}>
           Данные CRM хранятся на этом устройстве. Чтобы не потерять их при очистке данных
-          Telegram или смене устройства, регулярно создавайте резервные копии. Копию можно
-          сохранить в Telegram и восстановить на другом устройстве.
+          Telegram или смене телефона, сохраняйте копию в облако Telegram — оттуда её можно
+          восстановить на любом устройстве прямо из этих настроек. Дополнительно копию можно
+          выгрузить файлом.
         </div>
-        <div className="settings-row">
-          <div>
-            <div className="settings-row-title">Создать резервную копию</div>
-            <div className="settings-row-desc">
-              Сохраняет все данные CRM в один файл: клиенты, товары, заказы с напоминаниями,
-              история склада и реквизиты
+        {/* Почему облачных кнопок нет: без этого отсутствие функции в разделе выглядит как
+            пропажа — пользователь ждёт «Копию в облаке Telegram» и не понимает, где она. */}
+        {!cloudAvailable && (
+          <div className="settings-row">
+            <div>
+              <div className="settings-row-title">
+                {cloudAvailability === 'old-client'
+                  ? 'Облако Telegram: нужно обновить Telegram'
+                  : 'Облако Telegram: только внутри Telegram'}
+              </div>
+              <div className="settings-row-desc">
+                {cloudAvailability === 'old-client'
+                  ? 'Ваш клиент Telegram не умеет облачное хранилище (эта возможность появилась в Bot API 6.9). Обновите Telegram — и копию можно будет сохранять в аккаунт и восстанавливать на другом телефоне. Пока доступна копия файлом.'
+                  : 'Облачное хранилище Telegram доступно только приложению, открытому внутри Telegram. Запустите SelfCRM из бота — тогда копия будет привязана к аккаунту и её можно будет восстановить на новом телефоне. Здесь, в браузере или Android-сборке, доступна копия файлом.'}
+              </div>
             </div>
           </div>
-          <Button
-            size="sm"
-            variant="secondary"
-            icon="download"
-            onClick={() => void handleExport()}
-          >
-            Создать
-          </Button>
-        </div>
-        {backupNote && (
-          <div className="settings-row-desc" style={{ marginBottom: 4 }}>
-            {backupNote}
-          </div>
+        )}
+        {/* Файл скачивается в браузере и в Android-сборке. В мини-приложении Telegram клиент
+            файлы страницы не сохраняет, поэтому там кнопка не показывается — её заменяет облако:
+            иначе пользователь получил бы сообщение об успехе, которого не было. */}
+        {!cloudAvailable && (
+          <>
+            <div className="settings-row">
+              <div>
+                <div className="settings-row-title">Создать резервную копию</div>
+                <div className="settings-row-desc">
+                  Сохраняет все данные CRM в один файл: клиенты, товары, заказы с напоминаниями,
+                  история склада и реквизиты
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="download"
+                onClick={() => void handleExport()}
+              >
+                Создать
+              </Button>
+            </div>
+            {backupNote && (
+              <div className="settings-row-desc" style={{ marginBottom: 4 }}>
+                {backupNote}
+              </div>
+            )}
+          </>
+        )}
+        {cloudAvailable && (
+          <>
+            <div className="settings-row">
+              <div>
+                <div className="settings-row-title">Копия в облаке Telegram</div>
+                <div className="settings-row-desc">
+                  {cloudInfo
+                    ? `Сохранена ${cloudDateLabel(cloudInfo.createdAt)} · ${describeCounts(
+                        cloudInfo.counts,
+                      )}${sizeLabel(cloudInfo.bytes) ? ` · ${sizeLabel(cloudInfo.bytes)}` : ''}`
+                    : 'Копии пока нет. Облако привязано к аккаунту Telegram, поэтому копию можно восстановить на другом телефоне'}
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="telegram"
+                disabled={cloudBusy !== null}
+                onClick={() => void handleCloudSave()}
+              >
+                {cloudBusy === 'save' ? 'Сохранение…' : cloudInfo ? 'Обновить' : 'Сохранить'}
+              </Button>
+            </div>
+            {cloudInfo && (
+              <div className="settings-row">
+                <div>
+                  <div className="settings-row-title">Восстановить из облака Telegram</div>
+                  <div className="settings-row-desc">
+                    Загружает копию из облака и показывает её состав: данные заменятся только
+                    после подтверждения
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon="upload"
+                  disabled={cloudBusy !== null}
+                  onClick={() => void handleCloudRestore()}
+                >
+                  {cloudBusy === 'restore' ? 'Загрузка…' : 'Восстановить'}
+                </Button>
+              </div>
+            )}
+            {cloudInfo && (
+              <div className="settings-row">
+                <div>
+                  <div className="settings-row-title">Удалить копию из облака</div>
+                  <div className="settings-row-desc">
+                    Убирает копию из облака Telegram, данные на этом устройстве остаются
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon="trash"
+                  disabled={cloudBusy !== null}
+                  onClick={() => void handleCloudRemove()}
+                >
+                  {cloudBusy === 'remove' ? 'Удаление…' : 'Удалить'}
+                </Button>
+              </div>
+            )}
+            {cloudNote && (
+              <div className="settings-row-desc" style={{ marginBottom: 4 }}>
+                {cloudNote}
+              </div>
+            )}
+          </>
         )}
         <div className="settings-row">
           <div>
             <div className="settings-row-title">Восстановить из файла</div>
             <div className="settings-row-desc">
               Восстанавливает CRM из ранее созданной копии. Перед заменой данных приложение
-              покажет, что в файле. Подходит и копия из Android-сборки SelfCRM
+              покажет, что в файле. Так же читается копия из Android-сборки SelfCRM и файл,
+              выгруженный кнопкой «Создать»
             </div>
           </div>
           <Button
@@ -398,25 +624,29 @@ export function Settings() {
             Выбрать файл
           </Button>
         </div>
-        <div className="settings-row">
-          <div>
-            <div className="settings-row-title">Хранить копию в Telegram</div>
-            <div className="settings-row-desc">
-              Кнопка сохранит файл копии на устройство и откроет чат с ботом — прикрепите файл
-              в чате сами: 📎 → Файл → SelfCRM_backup_….json. Копия останется в истории чата,
-              откуда её можно скачать на новом устройстве. Отправить файл за вас приложение не
-              может: у мини-приложения нет доступа к переписке
+        {/* Облака нет (браузер, Android-сборка, старый клиент Telegram) — остаётся путь
+            «файл + чат с ботом»: файл сохраняет устройство, а отправляет его пользователь. */}
+        {!cloudAvailable && (
+          <div className="settings-row">
+            <div>
+              <div className="settings-row-title">Копия файлом в чат с ботом</div>
+              <div className="settings-row-desc">
+                Файл копии сохранится на устройство и откроется чат с ботом — прикрепите файл
+                в чате сами: 📎 → Файл → SelfCRM_backup_….json. Копия останется в истории
+                сообщений, откуда её можно скачать на новом устройстве. Отправить файл за вас
+                приложение не может: у него нет доступа к переписке
+              </div>
             </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon="telegram"
+              onClick={() => void handleTelegramCopy()}
+            >
+              Сохранить и открыть чат
+            </Button>
           </div>
-          <Button
-            size="sm"
-            variant="secondary"
-            icon="telegram"
-            onClick={() => void handleTelegramCopy()}
-          >
-            Сохранить и открыть чат
-          </Button>
-        </div>
+        )}
         {db.hasPreImportBackup() && (
           <div className="settings-row">
             <div>
