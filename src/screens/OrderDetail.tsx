@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Button, Card, EmptyState, Field, Input, Modal, MoneyInput, Select, Textarea, blockNonNumericKeys, cx } from '../components/ui'
 import { Icon } from '../components/Icons'
 import { SuggestField, type SuggestOption } from '../components/SuggestField'
+import { copyReceiptLink, shareReceiptLink } from '../pdf/receiptDelivery'
 import { useRoute } from '../router'
 import { useData } from '../state/DataContext'
 import {
@@ -62,6 +63,10 @@ export function OrderDetail({
   const [editing, setEditing] = useState(isNew)
   const [pdfBusy, setPdfBusy] = useState(false)
   const [pdfError, setPdfError] = useState('')
+  // Что произошло с чеком, отправленным ссылкой: заметка об успехе и сама ссылка — из
+  // неё собирается запасная кнопка «Скопировать ссылку».
+  const [pdfNote, setPdfNote] = useState('')
+  const [pdfLink, setPdfLink] = useState<{ url: string; text: string } | null>(null)
   // Окно «Добавить оплату» — состояние хука выше ранних выходов (правила хуков).
   const [paymentOpen, setPaymentOpen] = useState(false)
   // Окно создания напоминания — по тем же причинам тоже до ранних выходов.
@@ -366,17 +371,34 @@ export function OrderDetail({
             variant="primary"
             icon="doc"
             full
+            disabled={pdfBusy}
             onClick={() => {
               setPdfBusy(true)
               setPdfError('')
+              setPdfNote('')
+              setPdfLink(null)
               void import('../pdf/documents')
-                .then(({ generateReceiptPdf }) =>
-                  generateReceiptPdf({
+                .then(({ shareOrderReceipt }) =>
+                  shareOrderReceipt({
                     order,
                     client,
                     contractor: db.getSettings().contractor ?? emptyContractor(),
                   }),
                 )
+                .then(async (result) => {
+                  // В Telegram Mini App файл отдать нельзя: клиент не сохраняет blob и
+                  // не показывает blob-ссылки, а `WebApp.downloadFile` принимает только
+                  // адреса https: — поэтому вместо PDF уходит ссылка на страницу чека.
+                  // Выбор чата открывает сам клиент Telegram (`t.me/share/url`); если
+                  // открыть не удалось, ссылка ложится в буфер обмена, а под кнопкой
+                  // остаётся «Скопировать ссылку» — тупика «ничего не произошло» нет.
+                  if (result.kind !== 'link') return
+                  setPdfLink({ url: result.url, text: result.text })
+                  const target = await shareReceiptLink(result.url, result.text)
+                  if (target === 'opened') setPdfNote('Выберите чат в Telegram — ссылка на чек уже готова.')
+                  else if (target === 'copied') setPdfNote('Ссылка на чек скопирована — вставьте её в нужный чат.')
+                  else setPdfError('Не удалось открыть выбор чата — скопируйте ссылку кнопкой ниже')
+                })
                 .catch((e) => {
                   setPdfError(e instanceof Error ? e.message : 'Не удалось сформировать чек')
                 })
@@ -385,10 +407,40 @@ export function OrderDetail({
           >
             {pdfBusy ? 'Формирование…' : 'Чек (PDF)'}
           </Button>
+          <div className="field-hint" style={{ marginTop: 6 }}>
+            Чек уходит файлом или ссылкой — как умеет приложение, через которое вы работаете.
+          </div>
           {pdfError && (
             <div className="field-error" style={{ marginTop: 6 }}>
               {pdfError}
             </div>
+          )}
+          {pdfNote && (
+            <div className="field-hint" style={{ marginTop: 6 }}>
+              {pdfNote}
+            </div>
+          )}
+          {pdfLink && (
+            <Button
+              variant="outline"
+              size="sm"
+              icon="link"
+              full
+              style={{ marginTop: 8 }}
+              onClick={() => {
+                if (!pdfLink) return
+                void copyReceiptLink(pdfLink.url, pdfLink.text).then((copied) => {
+                  if (copied) {
+                    setPdfError('')
+                    setPdfNote('Ссылка на чек скопирована — вставьте её в нужный чат.')
+                  } else {
+                    setPdfError('Не удалось скопировать ссылку — откройте чек и скопируйте адрес из строки браузера')
+                  }
+                })
+              }}
+            >
+              Скопировать ссылку
+            </Button>
           )}
         </div>
       )}

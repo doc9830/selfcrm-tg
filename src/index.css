@@ -2001,6 +2001,108 @@ button {
   }
 }
 
+/* ---- Страница чека по ссылке ---- */
+
+/* Чек открывают и получатели ссылки, а не только владелец CRM: у страницы та же
+   шапка, но нет нижнего меню, поэтому отступ под навигацию здесь не нужен. */
+
+.receipt-main {
+  padding: 16px 16px calc(var(--safe-bottom) + 24px);
+}
+
+.receipt-paper {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px;
+}
+
+.receipt-company {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.receipt-company-props {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.receipt-title {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.receipt-subtitle {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.receipt-meta {
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.receipt-right {
+  text-align: right;
+}
+
+.receipt-table {
+  width: 100%;
+  margin-top: 12px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.receipt-table th {
+  padding: 3px 2px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.receipt-table td {
+  padding: 4px 2px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.receipt-table th.receipt-num,
+.receipt-table td.receipt-num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.receipt-total {
+  margin-top: 12px;
+  text-align: right;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.receipt-thanks {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.receipt-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.receipt-hint {
+  margin-top: 10px;
+  text-align: center;
+}
+
 /* ---- Тёмная тема ---- */
 
 :root[data-theme='dark'] {
@@ -2044,6 +2146,54 @@ button {
 
 :root[data-theme='dark'] .switch-track {
   background: #52525b;
+}
+
+/* ---- Печать чека ---- */
+
+/* На бумагу (и в PDF из окна печати) уходит только сам документ: шапка приложения,
+   кнопки и подсказки — части интерфейса, а не чека. Цвета фиксируем светлыми:
+   печать из тёмной темы иначе дала бы белый текст на белой бумаге. */
+@media print {
+  body {
+    background: #ffffff;
+  }
+
+  .app-header,
+  .app-nav,
+  .receipt-actions,
+  .receipt .field-hint,
+  .receipt .field-error {
+    display: none !important;
+  }
+
+  .app {
+    min-height: 0;
+  }
+
+  .app-main,
+  .receipt-main {
+    padding: 0;
+  }
+
+  .receipt-paper {
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    background: #ffffff;
+    color: #000000;
+  }
+
+  .receipt-company-props,
+  .receipt-subtitle,
+  .receipt-thanks {
+    color: #555555;
+  }
+
+  .receipt-table th,
+  .receipt-table td {
+    border-bottom-color: #cccccc;
+  }
 }
 
 

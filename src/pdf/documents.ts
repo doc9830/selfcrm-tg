@@ -1,19 +1,37 @@
 // Генерация документов. Реализован чек (квитанция) по завершённому заказу.
 // В основе — pdfmake: работает офлайн, встроенный шрифт Roboto поддерживает кириллицу.
+//
+// Чек отдаётся файлом или ссылкой — что доступно в этом клиенте, решает
+// `planReceiptDelivery` (pdf/receiptDelivery.ts). Сам документ собирается по данным
+// чека (pdf/receipt.ts), поэтому PDF по ссылке не отличается от файла. Точки входа:
+// `shareOrderReceipt()` — кнопка «Чек (PDF)» в карточке заказа, `saveReceiptPdf()` —
+// «Сохранить PDF» на странице чека.
 
 import pdfMake from 'pdfmake/build/pdfmake'
 import vfs from 'pdfmake/build/vfs_fonts'
-import type { Client, Contractor, Order } from '../types'
 import { Capacitor } from '@capacitor/core'
 import { Directory, Filesystem } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
-import { orderHeading } from '../utils/orders'
-import { orderPaymentState } from '../utils/payments'
+import { isTelegramEnvironment } from '../telegram/webapp'
+import {
+  packReceipt,
+  receiptData,
+  receiptFileName,
+  receiptHeading,
+  receiptLinkTooLong,
+  receiptMessage,
+  receiptTotal,
+  receiptUrl,
+  telegramShareUrl,
+  type ReceiptData,
+  type ReceiptInput,
+} from './receipt'
+import { canShareFiles, planReceiptDelivery } from './receiptDelivery'
 
 // В pdfmake 0.3.x шрифт Roboto (с кириллицей) подключается через виртуальную ФС.
 pdfMake.addVirtualFileSystem(vfs)
 
-// Возвращает готовый data-URL документа (нужно, чтобы записать файл на устройство).
+// Готовый data-URL документа: нужен, чтобы записать PDF в файл на устройстве.
 async function getPdfDataUrl(docDefinition: unknown): Promise<string> {
   return pdfMake.createPdf(docDefinition).getDataUrl()
 }
@@ -28,18 +46,10 @@ function pdfMoney(value: number): string {
   return `${formatted} руб.`
 }
 
-export interface ReceiptInput {
-  order: Order
-  client?: Client
-  contractor: Contractor
-}
-
-export async function generateReceiptPdf(input: ReceiptInput): Promise<void> {
-  const { order, client, contractor } = input
-  const total = order.items.reduce((sum, it) => sum + it.price * it.qty, 0)
-  // Номер заказа (у старых записей — первые символы идентификатора).
-  const number = order.number ? String(order.number) : order.id.slice(0, 8).toUpperCase()
-  const payment = orderPaymentState(order)
+// Описание PDF-чека для pdfmake: одно и то же для файла и для страницы по ссылке.
+export function receiptDocDefinition(data: ReceiptData): unknown {
+  const contractor = data.contractor
+  const total = receiptTotal(data)
 
   const header: Array<Record<string, unknown>> = []
   if (contractor.name.trim()) {
@@ -57,10 +67,10 @@ export async function generateReceiptPdf(input: ReceiptInput): Promise<void> {
   }
 
   const clientLines: Array<Record<string, unknown>> = [
-    { text: `Заказчик: ${client?.name?.trim() || '—'}` },
+    { text: `Заказчик: ${data.clientName || '—'}` },
   ]
-  if (client?.phone) clientLines.push({ text: `Телефон: ${client.phone}` })
-  if (client?.address) clientLines.push({ text: `Адрес: ${client.address}` })
+  if (data.clientPhone) clientLines.push({ text: `Телефон: ${data.clientPhone}` })
+  if (data.clientAddress) clientLines.push({ text: `Адрес: ${data.clientAddress}` })
 
   const tableHeader = ['№', 'Наименование', 'Кол-во', 'Цена', 'Сумма'].map((t) => ({
     text: t,
@@ -69,7 +79,7 @@ export async function generateReceiptPdf(input: ReceiptInput): Promise<void> {
 
   const tableBody: unknown[][] = [
     tableHeader,
-    ...order.items.map((item, i) => [
+    ...data.items.map((item, i) => [
       String(i + 1),
       item.name,
       String(item.qty),
@@ -81,7 +91,7 @@ export async function generateReceiptPdf(input: ReceiptInput): Promise<void> {
   const content: unknown[] = [
     ...header,
     // Номер и дата заказа — в шапке чека: по ним заказ находят в переписке.
-    { text: orderHeading(order), alignment: 'center', style: 'title', margin: [0, 10, 0, 2] },
+    { text: receiptHeading(data), alignment: 'center', style: 'title', margin: [0, 10, 0, 2] },
     { text: 'ЧЕК', alignment: 'center', style: 'subtitle', margin: [0, 0, 0, 4] },
     ...clientLines.map((line) => ({ ...line, margin: [0, 4, 0, 0], style: 'meta' })),
     {
@@ -111,18 +121,18 @@ export async function generateReceiptPdf(input: ReceiptInput): Promise<void> {
       margin: [0, 10, 0, 0],
     },
     // Оплата показывается только по заказам, где что-то уже внесено.
-    ...(payment.paid > 0
+    ...(data.paid > 0
       ? [
           {
-            text: `Оплачено: ${pdfMoney(payment.paid)}`,
+            text: `Оплачено: ${pdfMoney(data.paid)}`,
             alignment: 'right',
             style: 'meta',
             margin: [0, 2, 0, 0],
           },
-          ...(payment.remaining > 0
+          ...(data.remaining > 0
             ? [
                 {
-                  text: `К оплате: ${pdfMoney(payment.remaining)}`,
+                  text: `К оплате: ${pdfMoney(data.remaining)}`,
                   alignment: 'right',
                   style: 'meta',
                   margin: [0, 1, 0, 0],
@@ -150,26 +160,131 @@ export async function generateReceiptPdf(input: ReceiptInput): Promise<void> {
     },
   }
 
-  const filename = `check-${number}.pdf`
+  return docDefinition
+}
 
-  if (Capacitor.isNativePlatform()) {
-    // В Android-WebView скачивание через браузер не срабатывает, поэтому пишем PDF
-    // во временный каталог устройства и открываем системное меню «Поделиться».
-    const dataUrl = await getPdfDataUrl(docDefinition)
-    const file = await Filesystem.writeFile({
-      path: filename,
-      data: dataUrl,
-      directory: Directory.Cache,
-      recursive: true,
-    })
-    await Share.share({
-      title: `Заказ № ${number}`,
-      text: `Заказ № ${number}`,
-      files: [file.uri],
-    })
-    return
+// PDF-чек в виде файла: им делятся через системное меню «Поделиться», и его же
+// скачивает браузер. Файл, а не blob: меню «Поделиться» принимает только файлы.
+export async function receiptPdfFile(data: ReceiptData): Promise<File> {
+  const blob = await pdfMake.createPdf(receiptDocDefinition(data)).getBlob()
+  return new File([blob], receiptFileName(data), { type: 'application/pdf' })
+}
+
+// Обычное скачивание файла. Работает в браузере; в Telegram Mini App и Android-WebView
+// клиент его игнорирует — там путь доставки выбирает `planReceiptDelivery`.
+export async function downloadReceiptPdf(data: ReceiptData): Promise<void> {
+  const blob = await pdfMake.createPdf(receiptDocDefinition(data)).getBlob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = receiptFileName(data)
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+// Что в итоге произошло с чеком. Интерфейс говорит об этом текстом: 'link' — ссылку
+// нужно открыть (выбор чата), 'cancelled' — пользователь закрыл меню «Поделиться».
+export type ReceiptDeliveryResult =
+  | { kind: 'native' }
+  | { kind: 'shared' }
+  | { kind: 'downloaded' }
+  | { kind: 'cancelled' }
+  | { kind: 'link'; url: string; text: string; shareUrl: string }
+
+// Отдаёт чек по завершённому заказу: файлом, ссылкой или системным меню — смотря что
+// умеет клиент. Путь выбирается один раз здесь, поэтому экраны не знают про
+// особенности Telegram и Android.
+export async function shareOrderReceipt(input: ReceiptInput): Promise<ReceiptDeliveryResult> {
+  const data = receiptData(input)
+  const plan = planReceiptDelivery({
+    native: Capacitor.isNativePlatform(),
+    canShareFiles: canShareFiles(),
+    telegram: isTelegramEnvironment(),
+  })
+
+  if (plan === 'native') {
+    await writeAndShareReceiptFile(data)
+    return { kind: 'native' }
   }
 
-  await pdfMake.createPdf(docDefinition).download(filename)
+  if (plan === 'file-share') {
+    try {
+      await navigator.share({
+        files: [await receiptPdfFile(data)],
+        title: receiptHeading(data),
+        text: receiptMessage(data),
+      })
+      return { kind: 'shared' }
+    } catch (error) {
+      if (isShareCancel(error)) return { kind: 'cancelled' }
+      // Клиент обещал поддержку файлов, но отдать не смог — например, системное меню
+      // требует нажатия в том же такте, а PDF собирался асинхронно. Запасной путь —
+      // скачивание: ему нажатие не нужно. В Telegram этот путь не выполняется:
+      // `planReceiptDelivery` отправляет мини-приложение сразу к ссылке.
+      await downloadReceiptPdf(data)
+      return { kind: 'downloaded' }
+    }
+  }
+
+  if (plan === 'link-share') return receiptLink(data)
+
+  await downloadReceiptPdf(data)
+  return { kind: 'downloaded' }
+}
+
+// Что произошло при сохранении файла на странице чека: 'native' — PDF записан и отдан
+// системному меню, 'downloaded' — файл забирает браузер, 'unsupported' — клиент файлы
+// не принимает (Telegram Mini App игнорирует и blob-ссылки, и `<a download>`, а
+// `WebApp.downloadFile` принимает только адреса `https:`).
+export type ReceiptSaveResult = 'native' | 'downloaded' | 'unsupported'
+
+// Сохраняет чек файлом там, где это возможно. Отдельная точка входа для страницы чека:
+// кнопка «Сохранить PDF» не делится ссылкой, а кладёт файл на устройство — и странице
+// нужно знать, получилось ли (в Telegram — нет, о чём она честно сообщает текстом).
+export async function saveReceiptPdf(data: ReceiptData): Promise<ReceiptSaveResult> {
+  if (Capacitor.isNativePlatform()) {
+    await writeAndShareReceiptFile(data)
+    return 'native'
+  }
+  if (isTelegramEnvironment()) return 'unsupported'
+
+  await downloadReceiptPdf(data)
+  return 'downloaded'
+}
+
+// Запись PDF в Android-сборке: файл во временном каталоге + системное меню
+// «Поделиться», откуда его сохраняют в «Файлы» или отправляют в мессенджер.
+async function writeAndShareReceiptFile(data: ReceiptData): Promise<void> {
+  const file = await Filesystem.writeFile({
+    path: receiptFileName(data),
+    data: await getPdfDataUrl(receiptDocDefinition(data)),
+    directory: Directory.Cache,
+    recursive: true,
+  })
+  await Share.share({
+    title: receiptHeading(data),
+    text: receiptMessage(data),
+    files: [file.uri],
+  })
+}
+
+// Ссылка на чек: данные лежат в самом адресе, поэтому получатель открывает чек и
+// сохраняет PDF у себя. Слишком длинный чек — понятная ошибка, а не обрезанная ссылка.
+async function receiptLink(data: ReceiptData): Promise<ReceiptDeliveryResult> {
+  const payload = await packReceipt(data)
+  const url = receiptUrl(payload)
+  const text = receiptMessage(data)
+  if (receiptLinkTooLong(url, text)) {
+    throw new Error('Чек слишком длинный для ссылки — удалите лишние позиции или сохраните файл')
+  }
+  return { kind: 'link', url, text, shareUrl: telegramShareUrl(url, text) }
+}
+
+// Отмена системного меню — не ошибка: ничего не сломалось, пользователь просто закрыл
+// окно выбора. Остальные отказы — повод перейти на ссылку.
+function isShareCancel(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === 'AbortError'
 }
 

@@ -9,10 +9,12 @@ import { Dashboard } from './screens/Dashboard'
 import { OrderDetail } from './screens/OrderDetail'
 import { Orders } from './screens/Orders'
 import { Products } from './screens/Products'
+import { ReceiptView } from './screens/ReceiptView'
 import { Settings } from './screens/Settings'
 import { Statistics } from './screens/Statistics'
 import { Stock } from './screens/Stock'
 import { StockProduct } from './screens/StockProduct'
+import { receiptPayloadFromQuery } from './pdf/receipt'
 import { clientsArchiveFromQuery, repeatOrderFromQuery } from './utils/links'
 
 export function App() {
@@ -111,6 +113,12 @@ function renderScreen() {
           <Settings />
         </Layout>
       )
+
+    // Чек по ссылке: страница собирается из данных в адресе и своей оболочки не
+    // требует — нижнего меню и значков разделов на ней быть не должно, чек
+    // открывают и получатели ссылки.
+    case 'receipt':
+      return <ReceiptView payload={receiptPayloadFromQuery(route.query.get('d'))} />
 
     default:
       return (
