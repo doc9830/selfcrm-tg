@@ -11,9 +11,11 @@
 // в значении, поэтому текст режется на части по границам символов и по байтам
 // (кириллица занимает до двух байт на символ — считаем байты, а не символы).
 //
-// Ключи в облаке (с префиксом selfcrm:, чтобы не мешать другим мини-аппам):
-//   selfcrm:backup:manifest  — дата, имя файла, число частей и состав копии;
-//   selfcrm:backup:part:0…N  — части JSON.
+// Ключи в облаке. Telegram принимает только латиницу, цифры, «_» и «-» (1-128 символов),
+// поэтому в именах нет двоеточий и слов на кириллице — на «selfcrm:backup:part:0» клиент
+// отвечал STORAGE_KEY_INVALID и копия не сохранялась:
+//   selfcrm-backup-manifest  — дата, имя файла, число частей и состав копии;
+//   selfcrm-backup-part-0…N  — части JSON.
 //
 // Секретов здесь нет: initData и токен бота в копию не попадают (см. backupFormat.ts).
 
@@ -30,8 +32,10 @@ import {
   type CloudStorageAvailability,
 } from '../telegram/cloudStorage'
 
-export const CLOUD_MANIFEST_KEY = 'selfcrm:backup:manifest'
-export const CLOUD_PART_PREFIX = 'selfcrm:backup:part:'
+// Имена ключей: только разрешённые Telegram символы, поэтому префикс с дефисами, а не с
+// двоеточиями (см. проверку isValidCloudKey в telegram/cloudStorage.ts).
+export const CLOUD_MANIFEST_KEY = 'selfcrm-backup-manifest'
+export const CLOUD_PART_PREFIX = 'selfcrm-backup-part-'
 
 // Признак нашего манифеста: по нему видно, что в облаке лежит копия SelfCRM, а не
 // что-то чужое (в аккаунте Telegram есть и другие мини-аппы).

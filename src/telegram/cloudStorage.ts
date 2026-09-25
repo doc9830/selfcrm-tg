@@ -16,6 +16,13 @@
 
 import { getTelegramWebApp, isTelegramEnvironment, type TelegramCloudStorage } from './webapp'
 
+// Ключи облака Telegram ограничены: 1-128 символов и только латиница, цифры, «_» и «-».
+// Двоеточия, кириллица и пробелы недопустимы — клиент отвечает на них STORAGE_KEY_INVALID.
+// Поэтому имена ключей собираются только из разрешённых символов (см. src/db/cloudBackup.ts),
+// а здесь они ещё и проверяются до запроса: так ошибка видна сразу, с понятным текстом, а не
+// превращается в невнятный отказ уже во время сохранения копии.
+const CLOUD_KEY_RULES = 'разрешены только латиница, цифры, «_» и «-» (до 128 символов)'
+
 // Ошибки клиента, которые пользователю нужно объяснить человеческим языком.
 const CLOUD_ERROR_TEXT: Record<string, string> = {
   WebAppMethodUnsupported:
@@ -23,7 +30,30 @@ const CLOUD_ERROR_TEXT: Record<string, string> = {
   UNKNOWN_ERROR: 'Telegram не ответил на запрос к облаку. Проверьте интернет и попробуйте снова',
   VALUE_TOO_LONG: 'Telegram не принял слишком большое значение. Сохраните копию заново',
   KEY_TOO_LONG: 'Telegram не принял слишком длинное имя ключа',
+  STORAGE_KEY_INVALID: `Telegram не принимает такое имя ключа в облаке: ${CLOUD_KEY_RULES}`,
   STORAGE_LIMIT_EXCEEDED: 'В облаке Telegram закончилось место: удалите ненужные копии',
+}
+
+const CLOUD_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
+
+// Ключи облака Telegram ограничены: 1-128 символов и только латиница, цифры, «_» и «-».
+export function isValidCloudKey(key: string): boolean {
+  return CLOUD_KEY_PATTERN.test(key)
+}
+
+function invalidKeyError(key: string): Error {
+  return new Error(`Нельзя обратиться к облаку Telegram с ключом «${key}»: ${CLOUD_KEY_RULES}`)
+}
+
+// Ключи проверяются до запроса к клиенту, поэтому функция отклоняет промис (а не бросает
+// исключение синхронно): вызывающий код везде работает через await.
+function withKeyCheck<T>(key: string, run: () => Promise<T>): Promise<T> {
+  return isValidCloudKey(key) ? run() : Promise.reject(invalidKeyError(key))
+}
+
+function withKeysCheck<T>(keys: string[], run: () => Promise<T>): Promise<T> {
+  const bad = keys.find((key) => !isValidCloudKey(key))
+  return bad === undefined ? run() : Promise.reject(invalidKeyError(bad))
 }
 
 // Доступно ли облако в текущем окружении: только внутри Telegram и только в клиентах
@@ -100,36 +130,41 @@ function callCloud<T>(
 }
 
 export function cloudSetItem(key: string, value: string): Promise<void> {
-  return callCloud<void>('сохранить данные в облаке Telegram', (api, done) => {
-    api.setItem(key, value, (error) => done(error))
-  })
+  return withKeyCheck(key, () =>
+    callCloud<void>('сохранить данные в облаке Telegram', (api, done) => {
+      api.setItem(key, value, (error) => done(error))
+    }),
+  )
 }
 
 // Значение ключа или null, если ключа в облаке нет: для интерфейса «копии нет» — это
 // обычное состояние, а не ошибка.
 export function cloudGetItem(key: string): Promise<string | null> {
-  return callCloud<string | null>('прочитать данные из облака Telegram', (api, done) => {
-    api.getItem(key, (error, result) => done(error, result ?? null))
-  })
+  return withKeyCheck(key, () =>
+    callCloud<string | null>('прочитать данные из облака Telegram', (api, done) => {
+      api.getItem(key, (error, result) => done(error, result ?? null))
+    }),
+  )
 }
 
 // Значения нескольких ключей сразу: читать и писать копию по частям (см. cloudBackup)
 // дешевле одним запросом, чем сотней отдельных.
 export function cloudGetItems(keys: string[]): Promise<Record<string, string>> {
   if (keys.length === 0) return Promise.resolve({})
-  return callCloud<Record<string, string>>(
-    'прочитать данные из облака Telegram',
-    (api, done) => {
+  return withKeysCheck(keys, () =>
+    callCloud<Record<string, string>>('прочитать данные из облака Telegram', (api, done) => {
       api.getItems(keys, (error, result) => done(error, result ?? {}))
-    },
+    }),
   )
 }
 
 export function cloudRemoveItems(keys: string[]): Promise<void> {
   if (keys.length === 0) return Promise.resolve()
-  return callCloud<void>('удалить данные из облака Telegram', (api, done) => {
-    api.removeItems(keys, (error) => done(error))
-  })
+  return withKeysCheck(keys, () =>
+    callCloud<void>('удалить данные из облака Telegram', (api, done) => {
+      api.removeItems(keys, (error) => done(error))
+    }),
+  )
 }
 
 // Все ключи, которые приложение уже положило в облако: по ним видно части прежней

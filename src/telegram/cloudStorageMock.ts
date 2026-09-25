@@ -1,8 +1,10 @@
 // Поддельное облачное хранилище Telegram для тестов (src/telegram/cloudStorage.test.ts и
 // src/db/cloudBackup.test.ts): повторяет поведение клиента — значения до 4096 символов,
-// не больше 1024 ключей, CloudStorage только с Bot API 6.9, ответ приходит асинхронно
-// в callback. В сборку приложения этот файл не попадает: его импортируют только тесты.
+// не больше 1024 ключей, ключи только из латиницы, цифр, «_» и «-» (1-128 символов),
+// CloudStorage только с Bot API 6.9, ответ приходит асинхронно в callback.
+// В сборку приложения этот файл не попадает: его импортируют только тесты.
 
+import { isValidCloudKey } from './cloudStorage'
 import type { TelegramCloudStorage } from './webapp'
 
 // Лимиты клиента Telegram, из-за которых копия в облаке режется на части.
@@ -48,8 +50,21 @@ export function createCloudStorageMock(options: CloudStorageMockOptions = {}): C
 
   const api = {} as TelegramCloudStorage
 
+  // Недопустимый ключ клиент отвергает сразу: в тестах это видно как понятная ошибка
+  // приложения, а не как «копия почему-то не сохранилась».
+  const rejectBadKey = <T>(
+    keys: string[],
+    callback: ((error: string | null, result?: T) => void) | undefined,
+  ): boolean => {
+    const bad = keys.find((key) => !isValidCloudKey(key))
+    if (bad === undefined) return false
+    respond(callback, 'STORAGE_KEY_INVALID')
+    return true
+  }
+
   api.setItem = (key, value, callback) => {
     checkVersion()
+    if (rejectBadKey([key], callback)) return api
     if (value.length > valueLimit) {
       respond(callback, 'VALUE_TOO_LONG')
     } else if (!values.has(key) && values.size >= keyLimit) {
@@ -64,6 +79,7 @@ export function createCloudStorageMock(options: CloudStorageMockOptions = {}): C
 
   api.getItem = (key, callback) => {
     checkVersion()
+    if (rejectBadKey([key], callback)) return api
     calls.read += 1
     respond(callback, null, values.get(key))
     return api
@@ -71,6 +87,7 @@ export function createCloudStorageMock(options: CloudStorageMockOptions = {}): C
 
   api.getItems = (keys, callback) => {
     checkVersion()
+    if (rejectBadKey(keys, callback)) return api
     calls.read += 1
     const found: Record<string, string> = {}
     for (const key of keys) {
@@ -85,6 +102,7 @@ export function createCloudStorageMock(options: CloudStorageMockOptions = {}): C
 
   api.removeItems = (keys, callback) => {
     checkVersion()
+    if (rejectBadKey(keys, callback)) return api
     for (const key of keys) values.delete(key)
     calls.removed += 1
     respond(callback, null, true)

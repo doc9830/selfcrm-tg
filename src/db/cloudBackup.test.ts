@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Client } from '../types'
+import { isValidCloudKey } from '../telegram/cloudStorage'
 import { createCloudStorageMock, type CloudStorageMock } from '../telegram/cloudStorageMock'
 import { applyBackup } from './backup'
 import { buildBackupJson, describeCounts, parseBackup } from './backupFormat'
@@ -201,12 +202,28 @@ describe('cloudBackup: восстановление из облака на др�
     db.saveClient(bulkyClient())
     await saveCloudBackup(db)
     // В облаке аккаунта есть ключи других мини-приложений — их трогать нельзя.
-    mock.values.set('other-app:key', 'чужие данные')
+    mock.values.set('other-app-key', 'чужие данные')
 
     await removeCloudBackup()
 
     await expect(readCloudBackupInfo()).resolves.toBeNull()
-    expect([...mock.values.keys()]).toEqual(['other-app:key'])
+    expect([...mock.values.keys()]).toEqual(['other-app-key'])
+  })
+
+  it('все ключи копии допустимы для CloudStorage: без двоеточий и кириллицы', async () => {
+    // Регрессия на STORAGE_KEY_INVALID: Telegram принимает в ключах только A-Z, a-z, 0-9, «_» и «-».
+    const mock = createCloudStorageMock()
+    useCloud(mock)
+    const db = new Database(new MemoryStore())
+    db.saveClient(bulkyClient())
+
+    const info = await saveCloudBackup(db)
+
+    expect(info.parts).toBeGreaterThan(1)
+    expect(mock.values.size).toBe(info.parts + 1)
+    for (const key of mock.values.keys()) expect(isValidCloudKey(key)).toBe(true)
+    expect(isValidCloudKey(CLOUD_MANIFEST_KEY)).toBe(true)
+    expect(isValidCloudKey(`${CLOUD_PART_PREFIX}0`)).toBe(true)
   })
 })
 

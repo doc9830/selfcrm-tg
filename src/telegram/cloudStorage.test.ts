@@ -7,6 +7,7 @@ import {
   cloudSetItem,
   cloudStorageAvailability,
   cloudStorageSupported,
+  isValidCloudKey,
 } from './cloudStorage'
 import { createCloudStorageMock } from './cloudStorageMock'
 import type { TelegramCloudStorage } from './webapp'
@@ -77,17 +78,17 @@ describe('чтение и запись в облако', () => {
     const mock = createCloudStorageMock()
     useTelegramPage({ storage: mock.api })
 
-    await cloudSetItem('selfcrm:test', 'привет')
+    await cloudSetItem('selfcrm-test', 'привет')
 
-    expect(mock.values.get('selfcrm:test')).toBe('привет')
-    expect(await cloudGetItem('selfcrm:test')).toBe('привет')
+    expect(mock.values.get('selfcrm-test')).toBe('привет')
+    expect(await cloudGetItem('selfcrm-test')).toBe('привет')
   })
 
   it('отсутствующий ключ — null, а не ошибка', async () => {
     const mock = createCloudStorageMock()
     useTelegramPage({ storage: mock.api })
 
-    await expect(cloudGetItem('selfcrm:нет-такого')).resolves.toBeNull()
+    await expect(cloudGetItem('selfcrm-missing')).resolves.toBeNull()
   })
 
   it('getItems читает пачку ключей одним обращением к клиенту', async () => {
@@ -115,16 +116,50 @@ describe('чтение и запись в облако', () => {
   it('getKeys перечисляет ключи, removeItems удаляет', async () => {
     const mock = createCloudStorageMock()
     useTelegramPage({ storage: mock.api })
-    await cloudSetItem('selfcrm:backup:part:0', 'часть')
-    await cloudSetItem('selfcrm:backup:manifest', '{}')
+    await cloudSetItem('selfcrm-backup-part-0', 'часть')
+    await cloudSetItem('selfcrm-backup-manifest', '{}')
 
     await expect(cloudGetKeys()).resolves.toEqual([
-      'selfcrm:backup:part:0',
-      'selfcrm:backup:manifest',
+      'selfcrm-backup-part-0',
+      'selfcrm-backup-manifest',
     ])
 
-    await cloudRemoveItems(['selfcrm:backup:part:0'])
-    await expect(cloudGetKeys()).resolves.toEqual(['selfcrm:backup:manifest'])
+    await cloudRemoveItems(['selfcrm-backup-part-0'])
+    await expect(cloudGetKeys()).resolves.toEqual(['selfcrm-backup-manifest'])
+  })
+})
+
+describe('ключи облака: Telegram принимает только латиницу, цифры, «_» и «-»', () => {
+  it('проверяет ключи по правилам клиента', () => {
+    expect(isValidCloudKey('selfcrm-backup-part-0')).toBe(true)
+    expect(isValidCloudKey('selfcrm_backup_manifest')).toBe(true)
+    expect(isValidCloudKey('a'.repeat(128))).toBe(true)
+
+    // Из-за таких ключей сохранение копии падало с STORAGE_KEY_INVALID.
+    expect(isValidCloudKey('selfcrm:backup:part:0')).toBe(false)
+    expect(isValidCloudKey('selfcrm:backup:manifest')).toBe(false)
+    expect(isValidCloudKey('ключ')).toBe(false)
+    expect(isValidCloudKey('тут пробел')).toBe(false)
+    expect(isValidCloudKey('')).toBe(false)
+    expect(isValidCloudKey('a'.repeat(129))).toBe(false)
+  })
+
+  it('недопустимый ключ отвергается до запроса к клиенту', async () => {
+    const mock = createCloudStorageMock()
+    useTelegramPage({ storage: mock.api })
+
+    await expect(cloudSetItem('selfcrm:backup:part:0', 'часть')).rejects.toThrow(
+      'разрешены только латиница, цифры, «_» и «-»',
+    )
+    await expect(cloudGetItem('selfcrm:backup:manifest')).rejects.toThrow('ключом')
+    await expect(cloudGetItems(['selfcrm:backup:part:0'])).rejects.toThrow('ключом')
+    await expect(cloudRemoveItems(['selfcrm:backup:part:0'])).rejects.toThrow('ключом')
+
+    // Запрос к облаку не ушёл: ключ проверен заранее, ошибка понятна без ответа клиента.
+    expect(mock.calls.saved).toBe(0)
+    expect(mock.calls.read).toBe(0)
+    expect(mock.calls.removed).toBe(0)
+    expect(mock.values.size).toBe(0)
   })
 })
 
@@ -161,5 +196,18 @@ describe('ошибки облака: пользователю понятен т�
     useTelegramPage({ storage: mock.api })
 
     await expect(cloudSetItem('k', 'v')).rejects.toThrow('Telegram вернул ошибку: SOMETHING_BROKE')
+  })
+
+  it('STORAGE_KEY_INVALID от клиента объясняется, а не показывается кодом', async () => {
+    const mock = createCloudStorageMock()
+    mock.api.setItem = (_key, _value, callback) => {
+      Promise.resolve().then(() => callback?.('STORAGE_KEY_INVALID'))
+      return mock.api
+    }
+    useTelegramPage({ storage: mock.api })
+
+    await expect(cloudSetItem('k', 'v')).rejects.toThrow(
+      'разрешены только латиница, цифры, «_» и «-»',
+    )
   })
 })
