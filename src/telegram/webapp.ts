@@ -121,9 +121,38 @@ export function getTelegramWebApp(): TelegramWebApp | null {
   return window.Telegram?.WebApp ?? null
 }
 
+// Открыто ли приложение в клиенте Telegram (Mini App).
+//
+// Проверка по данным клиента, а не по самому объекту: официальный telegram-web-app.js
+// подключается страницей и создаёт `window.Telegram.WebApp` в любом браузере, а поле
+// `platform` вне Telegram равно строке 'unknown' (см. webAppPlatform в этом скрипте).
+// Раньше непустая строка считалась признаком Telegram, и SelfCRM в обычном браузере
+// считала себя мини-приложением: ссылки «открывались» запросами, которых никто не
+// получал, а файлы не сохранялись. Теперь клиент должен назвать себя сам — `initData`
+// или платформа (`android`, `ios`, `tdesktop`, `macos`, `web`, `weba`, `webk`).
 export function isTelegramEnvironment(): boolean {
   const app = getTelegramWebApp()
-  return Boolean(app && (app.initData || app.platform))
+  if (!app) return false
+  if (app.initData) return true
+  return Boolean(app.platform && app.platform !== 'unknown')
+}
+
+// Доходят ли запросы до клиента Telegram: мини-приложение или другой WebView клиента
+// (встроенный браузер, где Telegram тоже вставляет свой прокси). В обоих случаях файл
+// из страницы сохранить нельзя — клиент игнорирует blob-ссылки и `<a download>`, — а
+// ссылки открывает сам клиент: `window.open` в WebView остаётся без ответа.
+//
+// Признаки повторяют то, по чему сам telegram-web-app.js отправляет события
+// (WebView.postEvent): прокси клиента или `window.external.notify` в Windows-клиенте.
+export function insideTelegramWebView(): boolean {
+  if (typeof window === 'undefined') return false
+  if (isTelegramEnvironment()) return true
+  // Скрипт Telegram не загрузился — значит, это не клиент Telegram.
+  if (!getTelegramWebApp()) return false
+  const proxy = (window as { TelegramWebviewProxy?: unknown }).TelegramWebviewProxy
+  if (proxy !== undefined) return true
+  const external = window.external as { notify?: unknown } | undefined
+  return Boolean(external && 'notify' in external)
 }
 
 // Telegram ID пользователя — только для идентификации (подпись backup, будущие
@@ -161,15 +190,17 @@ function isTelegramLink(url: string): boolean {
 
 // Открывает внешнюю ссылку (чат с ботом, маршрут в картах, переписку в мессенджере).
 //
-// В Telegram Mini App это делает сам клиент: обычные `window.open` и клики по ссылкам
-// внутри WebView-мини-приложения игнорируются, поэтому раньше нажатия заканчивались только
+// В WebView клиента Telegram это делает сам клиент: обычные `window.open` и клики по
+// ссылкам внутри мини-приложения игнорируются, поэтому раньше нажатия заканчивались только
 // вибрацией. Ссылки `t.me` открываются через `openTelegramLink` (чат — внутри клиента),
-// все остальные — через `openLink` (браузер или приложение, зарегистрированное на ссылку).
+// все остальные — через `openLink` (клиент открывает их в браузере). Признак — WebView
+// клиента (`insideTelegramWebView`), а не сам объект WebApp: скрипт Telegram загружается
+// и в обычном браузере, где ни один запрос до клиента не доходит.
 // В Android-сборке (Capacitor) работает только `_system`: с ним ссылка уходит операционной
 // системе. В браузере — обычная новая вкладка.
 export function openExternalLink(url: string): BotChatTarget {
   const app = getTelegramWebApp()
-  if (isTelegramEnvironment()) {
+  if (insideTelegramWebView()) {
     if (isTelegramLink(url) && app?.openTelegramLink) {
       app.openTelegramLink(url)
       return 'telegram'

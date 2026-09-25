@@ -6,15 +6,22 @@
 //
 // Вид повторяет PDF-чек (`pdf/documents.ts`): те же строки в том же порядке, чтобы
 // ссылка и файл читались одинаково. Кнопки — те же действия, что и в карточке заказа:
-// сохранить файл, напечатать (на iPhone печать сохраняет PDF в «Файлы») и поделиться.
+// получить файл, напечатать (на iPhone печать сохраняет PDF в «Файлы») и поделиться.
+//
+// Внутри Telegram страница файл отдать не может: клиент игнорирует и blob-ссылки, и
+// `<a download>`, а `WebApp.downloadFile` принимает только адреса `https:`. Поэтому там
+// кнопка «Скачать PDF» не сохраняет файл, а открывает эту же страницу в браузере
+// (`WebApp.openLink` открывает внешний браузер) — с признаком `dl=1`, по которому
+// страница скачивает PDF сразу, без лишнего нажатия.
 //
 // pdfmake вместе с PDF-модулем подгружается по нажатию (`import()`): он весит больше
 // мегабайта, а получатель ссылки открывает страницу ради самого чека.
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Icon } from '../components/Icons'
 import { Button, EmptyState } from '../components/ui'
 import {
   packReceipt,
+  receiptDownloadUrl,
   receiptHeading,
   receiptMessage,
   receiptTotal,
@@ -24,24 +31,29 @@ import {
 } from '../pdf/receipt'
 import { shareReceiptLink } from '../pdf/receiptDelivery'
 import { go } from '../router'
-import { isTelegramEnvironment } from '../telegram/webapp'
+import { insideTelegramWebView, openExternalLink } from '../telegram/webapp'
 import { money } from '../utils/format'
 
-// В мини-приложении Telegram файл из страницы не сохраняется: клиент игнорирует и
-// blob-ссылки, и `<a download>`, а `WebApp.downloadFile` принимает только адреса
-// `https:`. Об этом честно говорит заметка под кнопками.
+// Что делать, когда браузер по кнопке не открылся (клиент отказал): подсказка называет
+// путь, который есть в самом Telegram — команду встроенного браузера.
 const TELEGRAM_SAVE_HINT =
-  'В Telegram файл не сохраняется — отправьте ссылку на чек или откройте страницу в браузере (меню «…» → «Открыть в браузере»).'
+  'В Telegram файл напрямую не сохраняется. Если браузер не открылся, скачайте чек из встроенного браузера: меню «…» → «Открыть в браузере».'
+const TELEGRAM_OPEN_NOTE = 'Чек открывается в браузере — там PDF сохранится как обычный файл.'
+const BROWSER_SAVE_HINT =
+  'Если файл не сохраняется, нажмите «Печать» и выберите «Сохранить в файлы».'
 
-export function ReceiptView({ payload }: { payload: string | null }) {
+export function ReceiptView({ payload, autoDownload = false }: { payload: string | null; autoDownload?: boolean }) {
   const [data, setData] = useState<ReceiptData | null>(null)
   const [broken, setBroken] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
-  // В Telegram открыт ли это мини-приложение — от этого зависит, работает ли сохранение
-  // файла и что писать в подсказке.
-  const telegram = isTelegramEnvironment()
+  // Внутри Telegram (мини-приложение или встроенный браузер) файл сохранить нечем, а
+  // ссылки открывает клиент — от этого зависят и кнопки, и подсказка под ними.
+  const telegram = insideTelegramWebView()
+  // Автоскачивание при `dl=1` выполняется один раз: смена состояния не должна запускать
+  // повторную загрузку файла.
+  const autoDone = useRef(false)
 
   useEffect(() => {
     setData(null)
@@ -77,6 +89,8 @@ export function ReceiptView({ payload }: { payload: string | null }) {
       if (result === 'native') {
         setNote('PDF готов — выберите «Сохранить в файлы» в системном меню.')
       } else if (result === 'unsupported') {
+        // Из интерфейса сюда не попасть: кнопки внутри Telegram ведут в браузер. Ответ
+        // оставлен честным на случай, если окружение распознали иначе.
         setNote(TELEGRAM_SAVE_HINT)
       } else {
         setNote('Файл отправлен на сохранение. Если загрузка не началась, нажмите «Печать» и сохраните PDF.')
@@ -84,6 +98,26 @@ export function ReceiptView({ payload }: { payload: string | null }) {
     })()
       .catch((e) => setError(e instanceof Error ? e.message : 'Не удалось сохранить файл'))
       .finally(() => setBusy(false))
+  }
+
+  // Страницу открыли в браузере по кнопке «Скачать PDF» (`dl=1`): файл скачивается сразу.
+  // Кнопка «Сохранить PDF» остаётся — если браузер такую загрузку отклонил, файл просят
+  // нажатием. Внутри Telegram ожидания нет: там автоскачивание не работает и не нужно.
+  useEffect(() => {
+    if (!autoDownload || telegram || autoDone.current || !data) return
+    autoDone.current = true
+    savePdf()
+  }, [autoDownload, telegram, data])
+
+  // «Скачать PDF» внутри Telegram: своей записи файла у страницы нет, поэтому открываем
+  // эту же страницу в браузере — там PDF скачивается (о чём просит признак `dl=1`).
+  const downloadInBrowser = () => {
+    if (!payload) return
+    setError('')
+    setNote('')
+    const target = openExternalLink(receiptDownloadUrl(receiptUrl(payload)))
+    if (target === 'failed') setError(TELEGRAM_SAVE_HINT)
+    else setNote(TELEGRAM_OPEN_NOTE)
   }
 
   const share = () => {
@@ -179,9 +213,17 @@ export function ReceiptView({ payload }: { payload: string | null }) {
         </div>
 
         <div className="receipt-actions">
-          <Button variant="primary" icon="download" full disabled={busy} onClick={savePdf}>
-            {busy ? 'Подготовка…' : 'Сохранить PDF'}
-          </Button>
+          {telegram ? (
+            // Внутри Telegram файл записать нечем — кнопка открывает чек в браузере, где
+            // PDF скачивается обычным образом (см. `downloadInBrowser`).
+            <Button variant="primary" icon="download" full disabled={busy} onClick={downloadInBrowser}>
+              Скачать PDF в браузере
+            </Button>
+          ) : (
+            <Button variant="primary" icon="download" full disabled={busy} onClick={savePdf}>
+              {busy ? 'Подготовка…' : 'Сохранить PDF'}
+            </Button>
+          )}
           <Button variant="secondary" icon="print" full onClick={() => window.print()}>
             Печать
           </Button>
@@ -200,11 +242,7 @@ export function ReceiptView({ payload }: { payload: string | null }) {
             {note}
           </div>
         )}
-        <div className="field-hint receipt-hint">
-          {telegram
-            ? TELEGRAM_SAVE_HINT
-            : 'Если файл не сохраняется, нажмите «Печать» и выберите «Сохранить в файлы» либо откройте страницу в браузере.'}
-        </div>
+        <div className="field-hint receipt-hint">{telegram ? TELEGRAM_SAVE_HINT : BROWSER_SAVE_HINT}</div>
       </div>
     </Shell>
   )

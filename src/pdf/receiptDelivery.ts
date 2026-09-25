@@ -15,7 +15,7 @@
 // но системного меню у WebView нет: промис не завершается, и нажатие «Чек (PDF)»
 // выглядело как «ничего не произошло». Ссылку же открывает сам клиент Telegram
 // (`t.me/share/url` → выбор чата), и этот путь работает и на Android, и на iOS.
-import { isTelegramEnvironment, openExternalLink } from '../telegram/webapp'
+import { insideTelegramWebView, openExternalLink } from '../telegram/webapp'
 import { telegramShareUrl } from './receipt'
 
 export interface ReceiptDeliveryEnv {
@@ -25,7 +25,7 @@ export interface ReceiptDeliveryEnv {
   // смысл только вне Telegram: в мини-приложении на Android ответ «да» ничего не
   // значит — меню всё равно не открывается.
   canShareFiles: boolean
-  // Приложение открыто внутри Telegram Mini App.
+  // Открыто внутри WebView клиента Telegram: мини-приложение или его встроенный браузер.
   telegram: boolean
 }
 
@@ -63,7 +63,7 @@ export type ReceiptLinkTarget = 'opened' | 'copied' | 'failed'
 // (`t.me/share/url`), в остальных браузерах — системное меню «Поделиться», а если
 // и его нет, ссылка копируется: её можно вставить в сообщение вручную.
 export async function shareReceiptLink(url: string, text: string): Promise<ReceiptLinkTarget> {
-  if (isTelegramEnvironment()) {
+  if (insideTelegramWebView()) {
     const target = openExternalLink(telegramShareUrl(url, text))
     if (target !== 'failed') return 'opened'
   }

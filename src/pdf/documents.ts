@@ -12,7 +12,7 @@ import vfs from 'pdfmake/build/vfs_fonts'
 import { Capacitor } from '@capacitor/core'
 import { Directory, Filesystem } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
-import { isTelegramEnvironment } from '../telegram/webapp'
+import { insideTelegramWebView } from '../telegram/webapp'
 import {
   packReceipt,
   receiptData,
@@ -201,7 +201,7 @@ export async function shareOrderReceipt(input: ReceiptInput): Promise<ReceiptDel
   const plan = planReceiptDelivery({
     native: Capacitor.isNativePlatform(),
     canShareFiles: canShareFiles(),
-    telegram: isTelegramEnvironment(),
+    telegram: insideTelegramWebView(),
   })
 
   if (plan === 'native') {
@@ -236,19 +236,21 @@ export async function shareOrderReceipt(input: ReceiptInput): Promise<ReceiptDel
 
 // Что произошло при сохранении файла на странице чека: 'native' — PDF записан и отдан
 // системному меню, 'downloaded' — файл забирает браузер, 'unsupported' — клиент файлы
-// не принимает (Telegram Mini App игнорирует и blob-ссылки, и `<a download>`, а
-// `WebApp.downloadFile` принимает только адреса `https:`).
+// не принимает (Telegram игнорирует и blob-ссылки, и `<a download>`, а `WebApp.downloadFile`
+// принимает только адреса `https:`).
 export type ReceiptSaveResult = 'native' | 'downloaded' | 'unsupported'
 
 // Сохраняет чек файлом там, где это возможно. Отдельная точка входа для страницы чека:
 // кнопка «Сохранить PDF» не делится ссылкой, а кладёт файл на устройство — и странице
-// нужно знать, получилось ли (в Telegram — нет, о чём она честно сообщает текстом).
+// нужно знать, получилось ли. Внутри Telegram не получилось: страница чека там вместо
+// этого открывает себя в браузере (см. `screens/ReceiptView.tsx`), а ответ 'unsupported'
+// остаётся честным для любого другого вызова.
 export async function saveReceiptPdf(data: ReceiptData): Promise<ReceiptSaveResult> {
   if (Capacitor.isNativePlatform()) {
     await writeAndShareReceiptFile(data)
     return 'native'
   }
-  if (isTelegramEnvironment()) return 'unsupported'
+  if (insideTelegramWebView()) return 'unsupported'
 
   await downloadReceiptPdf(data)
   return 'downloaded'

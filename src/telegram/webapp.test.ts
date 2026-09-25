@@ -7,7 +7,14 @@ vi.mock('@capacitor/core', () => ({
   Capacitor: { isNativePlatform: () => capacitor.native },
 }))
 
-import { openBotChat, openExternalLink, TELEGRAM_BOT_URL, type TelegramWebApp } from './webapp'
+import {
+  insideTelegramWebView,
+  isTelegramEnvironment,
+  openBotChat,
+  openExternalLink,
+  TELEGRAM_BOT_URL,
+  type TelegramWebApp,
+} from './webapp'
 
 afterEach(() => {
   capacitor.native = false
@@ -15,8 +22,13 @@ afterEach(() => {
 })
 
 // Заглушка окна: запоминает вызовы window.open и, если нужно, отдаёт результат (null —
-// браузер заблокировал переход).
-function stubWindow(webApp?: Partial<TelegramWebApp>, openResult: unknown = {}) {
+// браузер заблокировал переход). `extra` добавляет признаки клиента Telegram — например,
+// прокси, через который события доходят до клиента во встроенном браузере.
+function stubWindow(
+  webApp?: Partial<TelegramWebApp>,
+  openResult: unknown = {},
+  extra: Record<string, unknown> = {},
+) {
   const calls: Array<{ url: string; target?: string }> = []
   vi.stubGlobal('window', {
     Telegram: webApp ? { WebApp: webApp } : undefined,
@@ -24,9 +36,56 @@ function stubWindow(webApp?: Partial<TelegramWebApp>, openResult: unknown = {}) 
       calls.push({ url, target })
       return openResult
     },
+    ...extra,
   })
   return calls
 }
+
+describe('определение окружения', () => {
+  it('мини-приложение узнаётся по данным клиента', () => {
+    stubWindow({ initData: 'query_id=1', platform: 'android' })
+    expect(isTelegramEnvironment()).toBe(true)
+  })
+
+  it('клиент без initData узнаётся по названной платформе', () => {
+    stubWindow({ initData: '', platform: 'weba' })
+    expect(isTelegramEnvironment()).toBe(true)
+  })
+
+  it('в обычном браузере окружение не телеграмное', () => {
+    // telegram-web-app.js подключается самой страницей, а платформу вне Telegram
+    // оставляет равной 'unknown'. Из-за этой строки приложение раньше считало себя
+    // мини-приложением в любом браузере: ссылки «открывались в пустоту», а PDF не
+    // сохранялся, потому что клиент файл не принимает.
+    stubWindow({ initData: '', platform: 'unknown' })
+    expect(isTelegramEnvironment()).toBe(false)
+  })
+
+  it('объект WebApp без данных Telegram окружением не считается', () => {
+    stubWindow({ initData: '', platform: '' })
+    expect(isTelegramEnvironment()).toBe(false)
+
+    stubWindow()
+    expect(isTelegramEnvironment()).toBe(false)
+
+    vi.stubGlobal('window', undefined)
+    expect(isTelegramEnvironment()).toBe(false)
+  })
+
+  it('встроенный браузер Telegram узнаётся по прокси клиента', () => {
+    // Данных мини-приложения там нет, но события уходят клиенту через прокси.
+    stubWindow({ initData: '', platform: 'unknown' }, {}, { TelegramWebviewProxy: {} })
+    expect(insideTelegramWebView()).toBe(true)
+  })
+
+  it('обычный браузер не считается WebView клиента', () => {
+    stubWindow({ initData: '', platform: 'unknown' })
+    expect(insideTelegramWebView()).toBe(false)
+
+    vi.stubGlobal('window', undefined)
+    expect(insideTelegramWebView()).toBe(false)
+  })
+})
 
 describe('TELEGRAM_BOT_URL', () => {
   it('ведёт в чат с ботом @fastcrm_bot', () => {
@@ -60,6 +119,31 @@ describe('openExternalLink', () => {
 
     expect(openExternalLink('https://wa.me/79001112233')).toBe('browser')
     expect(calls).toEqual([{ url: 'https://wa.me/79001112233', target: '_blank' }])
+  })
+
+  it('в обычном браузере ссылку открывает вкладка, а не клиент Telegram', () => {
+    // Скрипт telegram-web-app.js загружен страницей, платформа 'unknown': запрос
+    // `openLink` ушёл бы в пустоту, поэтому вкладку открывает сам браузер.
+    const openLink = vi.fn()
+    const calls = stubWindow({ initData: '', platform: 'unknown', openLink })
+
+    expect(openExternalLink('https://wa.me/79001112233')).toBe('browser')
+    expect(openLink).not.toHaveBeenCalled()
+    expect(calls).toEqual([{ url: 'https://wa.me/79001112233', target: '_blank' }])
+  })
+
+  it('во встроенном браузере Telegram открывает ссылку через клиент', () => {
+    // Данных мини-приложения там нет, но прокси клиента есть — запрос доходит.
+    const openLink = vi.fn()
+    const calls = stubWindow(
+      { initData: '', platform: 'unknown', openLink },
+      {},
+      { TelegramWebviewProxy: {} },
+    )
+
+    expect(openExternalLink('https://wa.me/79001112233')).toBe('telegram')
+    expect(openLink).toHaveBeenCalledWith('https://wa.me/79001112233')
+    expect(calls).toEqual([])
   })
 })
 

@@ -304,6 +304,23 @@ export function receiptUrl(
   return `${base}#${receiptPath(payload)}`
 }
 
+// Признак в адресе страницы чека: «страницу открыли ради файла» (`#/receipt?d=…&dl=1`).
+// Внутри Telegram страница файл отдать не может, поэтому кнопка «Скачать PDF» открывает
+// эту же страницу в браузере — а там по этому признаку PDF скачивается сразу.
+export const RECEIPT_DOWNLOAD_PARAM = 'dl'
+
+// Тот же адрес чека, но с просьбой скачать файл. Приписывается к готовой ссылке: в ней
+// уже есть параметр `d`, поэтому разделителем служит `&`.
+export function receiptDownloadUrl(url: string): string {
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}${RECEIPT_DOWNLOAD_PARAM}=1`
+}
+
+// Скачивать ли файл сразу при открытии страницы — по параметру `dl`.
+export function receiptWantsDownload(value: string | null): boolean {
+  return value === '1'
+}
+
 // Ссылка «поделиться» Telegram: клиент сам открывает выбор чата и подставляет в
 // сообщение адрес страницы чека с подписью. Нужна там, где файл отдать нельзя, —
 // на iPhone в мини-приложении вместо PDF уходит ссылка, по которой получатель

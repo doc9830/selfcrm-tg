@@ -2,9 +2,11 @@ import { useRef, useState } from 'react'
 import { Button, Card, EmptyState, Field, Input, Modal, MoneyInput, Select, Textarea, blockNonNumericKeys, cx } from '../components/ui'
 import { Icon } from '../components/Icons'
 import { SuggestField, type SuggestOption } from '../components/SuggestField'
+import { receiptDownloadUrl } from '../pdf/receipt'
 import { copyReceiptLink, shareReceiptLink } from '../pdf/receiptDelivery'
 import { useRoute } from '../router'
 import { useData } from '../state/DataContext'
+import { openExternalLink } from '../telegram/webapp'
 import {
   ORDER_STATUSES,
   ORDER_STATUS_LABEL,
@@ -395,8 +397,10 @@ export function OrderDetail({
                   if (result.kind !== 'link') return
                   setPdfLink({ url: result.url, text: result.text })
                   const target = await shareReceiptLink(result.url, result.text)
-                  if (target === 'opened') setPdfNote('Выберите чат в Telegram — ссылка на чек уже готова.')
-                  else if (target === 'copied') setPdfNote('Ссылка на чек скопирована — вставьте её в нужный чат.')
+                  if (target === 'opened')
+                    setPdfNote('Выберите чат в Telegram — ссылка на чек уже готова. Скачать сам PDF можно кнопкой ниже.')
+                  else if (target === 'copied')
+                    setPdfNote('Ссылка на чек скопирована — вставьте её в нужный чат, а PDF скачайте кнопкой ниже.')
                   else setPdfError('Не удалось открыть выбор чата — скопируйте ссылку кнопкой ниже')
                 })
                 .catch((e) => {
@@ -421,26 +425,51 @@ export function OrderDetail({
             </div>
           )}
           {pdfLink && (
-            <Button
-              variant="outline"
-              size="sm"
-              icon="link"
-              full
-              style={{ marginTop: 8 }}
-              onClick={() => {
-                if (!pdfLink) return
-                void copyReceiptLink(pdfLink.url, pdfLink.text).then((copied) => {
-                  if (copied) {
-                    setPdfError('')
-                    setPdfNote('Ссылка на чек скопирована — вставьте её в нужный чат.')
+            <>
+              {/* Ссылку на чек клиент Telegram открывает сам, а вот файл получается
+                  только в браузере: страница чека отдаёт PDF обычным скачиванием.
+                  Кнопка открывает чек там — иначе на Android файла не получить. */}
+              <Button
+                variant="secondary"
+                size="sm"
+                icon="download"
+                full
+                style={{ marginTop: 8 }}
+                onClick={() => {
+                  if (!pdfLink) return
+                  const target = openExternalLink(receiptDownloadUrl(pdfLink.url))
+                  if (target === 'failed') {
+                    setPdfNote('')
+                    setPdfError('Не удалось открыть браузер — скопируйте ссылку кнопкой ниже')
                   } else {
-                    setPdfError('Не удалось скопировать ссылку — откройте чек и скопируйте адрес из строки браузера')
+                    setPdfError('')
+                    setPdfNote('Чек открывается в браузере — там PDF сохранится как обычный файл.')
                   }
-                })
-              }}
-            >
-              Скопировать ссылку
-            </Button>
+                }}
+              >
+                Скачать PDF
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                icon="link"
+                full
+                style={{ marginTop: 8 }}
+                onClick={() => {
+                  if (!pdfLink) return
+                  void copyReceiptLink(pdfLink.url, pdfLink.text).then((copied) => {
+                    if (copied) {
+                      setPdfError('')
+                      setPdfNote('Ссылка на чек скопирована — вставьте её в нужный чат.')
+                    } else {
+                      setPdfError('Не удалось скопировать ссылку — откройте чек и скопируйте адрес из строки браузера')
+                    }
+                  })
+                }}
+              >
+                Скопировать ссылку
+              </Button>
+            </>
           )}
         </div>
       )}

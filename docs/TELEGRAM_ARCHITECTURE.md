@@ -44,7 +44,7 @@
 
 | Файл                               | Ответственность                                                                 |
 | ---------------------------------- | ------------------------------------------------------------------------------- |
-| `src/telegram/webapp.ts`           | Типы WebApp API и null-safe доступ: `getTelegramWebApp()`, `isTelegramEnvironment()`, `getTelegramUserId()`, `getTelegramUserLabel()`, `openBotChat()` / `TELEGRAM_BOT_URL` |
+| `src/telegram/webapp.ts`           | Типы WebApp API и null-safe доступ: `getTelegramWebApp()`, `isTelegramEnvironment()`, `insideTelegramWebView()`, `openExternalLink()` / `openBotChat()`, `TELEGRAM_BOT_URL`, `getTelegramUserId()`, `getTelegramUserLabel()` |
 | `src/telegram/environment.ts`      | `initTelegramEnvironment()` (`ready()`, `expand()`, слежение за `viewportChanged`, переменные `--tg-height` / `--tg-stable-height`), `syncTelegramChrome()`, `telegramColorScheme()`, `setTelegramBackButtonVisible()`, `onTelegramBackButton()`, `onTelegramThemeChange()` |
 | `src/telegram/cloudStorage.ts`     | Промисная обёртка над `WebApp.CloudStorage` (Bot API 6.9+): `cloudStorageSupported()`, `cloudStorageAvailability()` (почему облака нет: `ready`, `old-client`, `outside-telegram`), `cloudSetItem()`, `cloudGetItem()`, `cloudGetItems()`, `cloudRemoveItems()`, `cloudGetKeys()`; коды ошибок клиента переводятся в понятный текст |
 | `src/components/TelegramShell.tsx` | React-мост: вызывает функции выше и связывает события Telegram с роутером (`backTarget`) и темой (`applyTelegramScheme`). Ничего не рендерит |
@@ -157,6 +157,15 @@ SelfCRM → Настройки → Резервная копия → «Созд�
 `telegram-web-app.js` создаёт похожий объект-заглушку и в обычном браузере (`initData` пуст,
 `platform = 'unknown'`).
 
+Тем же данным верит `isTelegramEnvironment()` (`src/telegram/webapp.ts`): окружение считается
+телеграмным по `initData` от клиента или по названной им платформе, а пустой `initData` вместе с
+`platform = 'unknown'` — это обычный браузер. Раньше признаком был сам объект `window.Telegram.WebApp`,
+и в браузере приложение считало себя мини-приложением: ссылки «открывались в пустоту», а PDF не
+сохранялся. Отдельно есть `insideTelegramWebView()` — «мы внутри WebView клиента»: он охватывает и
+мини-приложение (по данным клиента), и встроенный браузер Telegram (данных мини-приложения там нет,
+но события доходят через `window.TelegramWebviewProxy` или `window.external.notify`). От этого
+признака зависит и открытие ссылок (`openExternalLink()`), и сохранение файлов.
+
 Роли в этой схеме:
 
 - **Mini App** собирает копию и читает её при восстановлении. Доступа к истории сообщений у него
@@ -197,10 +206,14 @@ SelfCRM → Настройки → Резервная копия → «Созд�
   и `navigator.canShare` объявлены и на пробный PDF отвечают «да», но системного меню у WebView
   нет — промис не завершается, и нажатие «Чек (PDF)» выглядело как «ничего не произошло» (на iOS
   тот же путь работал, потому что файлы в Web Share API там не поддержаны). Если выбор чата не
-  открылся, ссылка ложится в буфер обмена, а под кнопкой «Чек (PDF)» остаётся «Скопировать
-  ссылку». В Android-сборке SelfCRM (Capacitor) путь другой: PDF пишется в `Directory.Cache` и
-  открывается системным меню «Поделиться», а «Сохранить PDF» на самой странице чека в
-  мини-приложении честно сообщает, что файл отдать нечем (`saveReceiptPdf()`).
+  открылся, ссылка ложится в буфер обмена, а под кнопкой «Чек (PDF)» остаются кнопки «Скачать PDF» и
+  «Скопировать ссылку». Файл из мини-приложения всё-таки достаётся — через браузер: «Скачать PDF» в
+  карточке заказа и «Скачать PDF в браузере» на странице чека открывают ту же страницу с признаком
+  `dl=1` (`receiptDownloadUrl()`), и в браузере PDF скачивается сразу, без второго нажатия
+  (`receiptWantsDownload()` → `autoDownload` в `src/screens/ReceiptView.tsx`). В Android-сборке
+  SelfCRM (Capacitor) путь другой: PDF пишется в `Directory.Cache` и открывается системным меню
+  «Поделиться», а `saveReceiptPdf()` внутри Telegram (мини-приложение или его встроенный браузер)
+  честно отвечает «файл отдать нечем».
 - Формат файла — конверт `{format, version, createdAt, appVersion, app, data}`
   (`src/db/backupFormat.ts`) с дублями ключей снимка в корне: так файл читает и Android-сборка SelfCRM.
   Импорт принимает оба варианта, а копию с более новой версией формата отклоняет с понятным сообщением.

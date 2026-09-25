@@ -14,8 +14,9 @@ afterEach(() => {
 })
 
 // Заглушка окна: запоминает вызовы window.open (вне Telegram сюда попадают только
-// ссылки, которые клиент открыть не смог).
-function stubWindow(webApp?: Partial<TelegramWebApp>) {
+// ссылки, которые клиент открыть не смог). `extra` добавляет признаки клиента — например,
+// прокси, по которому telegram-web-app.js отправляет события во встроенном браузере.
+function stubWindow(webApp?: Partial<TelegramWebApp>, extra: Record<string, unknown> = {}) {
   const calls: Array<{ url: string; target?: string }> = []
   vi.stubGlobal('window', {
     Telegram: webApp ? { WebApp: webApp } : undefined,
@@ -23,6 +24,7 @@ function stubWindow(webApp?: Partial<TelegramWebApp>) {
       calls.push({ url, target })
       return {}
     },
+    ...extra,
   })
   return calls
 }
@@ -145,6 +147,32 @@ describe('shareReceiptLink', () => {
 
     expect(await shareReceiptLink(url, text)).toBe('opened')
     expect(openLink).toHaveBeenCalledTimes(1)
+  })
+
+  it('во встроенном браузере Telegram выбор чата тоже открывает клиент', async () => {
+    // Встроенный браузер клиента данных мини-приложения не получает (initData пуст,
+    // платформа 'unknown'), но события до клиента доходят через его прокси.
+    const openLink = vi.fn()
+    const calls = stubWindow(
+      { initData: '', platform: 'unknown', openLink },
+      { TelegramWebviewProxy: {} },
+    )
+
+    expect(await shareReceiptLink(url, text)).toBe('opened')
+    expect(openLink).toHaveBeenCalledTimes(1)
+    expect(calls).toEqual([])
+  })
+
+  it('в обычном браузере ссылку отдаёт системное меню, хотя скрипт Telegram загружен', async () => {
+    // Скрипт telegram-web-app.js подключается страницей: объекта WebApp самого по себе
+    // недостаточно, чтобы считать браузер телеграмным — иначе запрос уходил в пустоту.
+    const share = vi.fn(() => Promise.resolve())
+    stubNavigator({ share })
+    const calls = stubWindow({ initData: '', platform: 'unknown' })
+
+    expect(await shareReceiptLink(url, text)).toBe('opened')
+    expect(share).toHaveBeenCalledWith({ title: text, text, url })
+    expect(calls).toEqual([])
   })
 
   it('вне Telegram отдаёт ссылку системному меню «Поделиться»', async () => {

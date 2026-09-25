@@ -6,9 +6,10 @@ import { describe, expect, it, vi } from 'vitest'
 // Окружение Telegram подменяется, потому что от него зависит сохранение файла на
 // странице чека: в мини-приложении клиент файлы не принимает, и об этом нужно знать
 // заранее, а не показывать пустое скачивание.
-const env = vi.hoisted(() => ({ telegram: false }))
+const env = vi.hoisted(() => ({ telegram: false, webview: false }))
 vi.mock('../telegram/webapp', () => ({
   isTelegramEnvironment: () => env.telegram,
+  insideTelegramWebView: () => env.telegram || env.webview,
 }))
 
 import { emptyContractor, type Client, type Order } from '../types'
@@ -18,6 +19,7 @@ import { receiptData } from './receipt'
 // Возвращает окружение к обычному браузеру: тесты не должны зависеть от порядка запуска.
 function browserEnv(): void {
   env.telegram = false
+  env.webview = false
 }
 
 const contractor = { ...emptyContractor(), name: 'ИП Иванов И. И.', inn: '770123456789' }
@@ -133,6 +135,16 @@ describe('сохранение чека файлом', () => {
     // Клиент Telegram игнорирует и blob-ссылки, и `<a download>`, поэтому страница чека
     // не делает вид, что скачала файл, а предлагает ссылку и браузер.
     env.telegram = true
+    expect(await saveReceiptPdf(receiptData({ order: makeOrder(), client, contractor }))).toBe(
+      'unsupported',
+    )
+    browserEnv()
+  })
+
+  it('во встроенном браузере Telegram файл тоже записать нечем', async () => {
+    // Данных мини-приложения в нём нет, но это тот же WebView клиента: страница чека
+    // открывает себя в браузере вместо пустого скачивания.
+    env.webview = true
     expect(await saveReceiptPdf(receiptData({ order: makeOrder(), client, contractor }))).toBe(
       'unsupported',
     )

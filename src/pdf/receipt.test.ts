@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Client, Contractor, Order } from '../types'
 import {
   packReceipt,
+  RECEIPT_DOWNLOAD_PARAM,
   receiptData,
+  receiptDownloadUrl,
   receiptFileName,
   receiptHeading,
   receiptLinkTooLong,
@@ -11,6 +13,7 @@ import {
   receiptPath,
   receiptTotal,
   receiptUrl,
+  receiptWantsDownload,
   telegramShareUrl,
   unpackReceipt,
   type ReceiptData,
@@ -247,6 +250,36 @@ describe('ссылка на чек', () => {
     expect(receiptUrl('1.abc', { origin: 'file://', pathname: '/index.html' })).toBe(
       '#/receipt?d=1.abc',
     )
+  })
+
+  it('ссылка на скачивание добавляет признак к готовому адресу чека', () => {
+    expect(receiptDownloadUrl('https://doc9830.github.io/selfcrm-tg/#/receipt?d=1.abc')).toBe(
+      'https://doc9830.github.io/selfcrm-tg/#/receipt?d=1.abc&dl=1',
+    )
+  })
+
+  it('относительный адрес и адрес без параметров тоже получают признак', () => {
+    expect(receiptDownloadUrl('#/receipt?d=1.abc')).toBe('#/receipt?d=1.abc&dl=1')
+    expect(receiptDownloadUrl('https://example.com/receipt')).toBe(
+      'https://example.com/receipt?dl=1',
+    )
+  })
+
+  it('признак скачивания не мешает прочитать данные чека', () => {
+    const url = receiptDownloadUrl(
+      receiptUrl('1.abc', { origin: 'https://doc9830.github.io', pathname: '/selfcrm-tg/' }),
+    )
+    const query = new URLSearchParams(url.slice(url.indexOf('?') + 1))
+
+    expect(query.get('d')).toBe('1.abc')
+    expect(query.get(RECEIPT_DOWNLOAD_PARAM)).toBe('1')
+  })
+
+  it('скачивать файл сразу — только по признаку «1»', () => {
+    expect(receiptWantsDownload('1')).toBe(true)
+    expect(receiptWantsDownload('true')).toBe(false)
+    expect(receiptWantsDownload('0')).toBe(false)
+    expect(receiptWantsDownload(null)).toBe(false)
   })
 
   it('ссылка «поделиться» в Telegram экранирует адрес и подпись', () => {
