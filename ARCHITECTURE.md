@@ -60,7 +60,9 @@ SelfCRM (React) → KVStore (localStorage) — все данные остают�
 | `index.html`                        | подключение `telegram-web-app.js`, CSP, тема до отрисовки    |
 | `src/index.css`                     | `--safe-*` и `--tg-stable-height` вместо жёстких отступов    |
 | `public/sw.js`                      | офлайн-оболочка страницы                                     |
-| `scripts/telegram-bot.mjs`          | бот: `/start`, `/help`, кнопка «Открыть SelfCRM» и кнопка меню (общая и в чате) |
+| `scripts/telegram-bot.mjs`          | бот: `/start`, `/help`, `/whatsnew`, кнопка «Открыть SelfCRM» и кнопка меню (общая и в чате) |
+| `.github/workflows/sync-from-selfcrm.yml` | перенос новых функций Android-версии: `scripts/sync-from-selfcrm.mjs` → ветка и PR с отчётом |
+| `.github/workflows/ci.yml`          | типы, тесты и сборка на pull request                        |
 
 Ключевое правило: **слой Telegram необязателен**. Любая функция `src/telegram/*` возвращает
 `null` или `() => {}`, если `window.Telegram.WebApp` отсутствует, поэтому то же приложение

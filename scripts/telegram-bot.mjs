@@ -10,6 +10,11 @@
 // Примеры:
 //   node scripts/telegram-bot.mjs --setup    # один раз: команды /start, /help и кнопка меню
 //   node scripts/telegram-bot.mjs            # запустить бота (long polling)
+//   node scripts/telegram-bot.mjs --whatsnew # посмотреть текст «что нового» без отправки
+//
+// Команда /whatsnew читает последний релиз Android-версии (doc9830/SelfCRM) через публичный
+// GitHub API и присылает changelog. Сам Mini App берётся с GitHub Pages и обновляется сам,
+// поэтому кнопка в ответе всегда открывает новую версию — релизов и переустановки нет.
 //
 // Кнопка меню ставится в двух местах: как общая (по умолчанию, для всех пользователей) и
 // у конкретного чата — сразу после первого сообщения боту. Так кнопка появляется даже там,
@@ -26,12 +31,23 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const TELEGRAM_API = 'https://api.telegram.org'
 const DEFAULT_WEBAPP_URL = 'https://doc9830.github.io/selfcrm-tg/'
 
+// Релизы Android-версии: публичный API, токен не нужен. Список изменений живёт там,
+// а Mini App обновляется сам с GitHub Pages — /whatsnew только рассказывает, что нового.
+const RELEASES_API = 'https://api.github.com/repos/doc9830/SelfCRM/releases'
+const RELEASES_URL = 'https://github.com/doc9830/SelfCRM/releases'
+const GITHUB_USER_AGENT = 'selfcrm-telegram-bot'
+
+// Ответ GitHub кэшируется: лимит для неавторизованных запросов — 60 в час с одного IP.
+const RELEASE_CACHE_MS = 10 * 60 * 1000
+let releaseCache = { at: 0, value: null }
+
 const USAGE = `Бот-лаунчер SelfCRM.
 
 Аргументы:
   --setup               задать команды бота и кнопку меню со ссылкой на Mini App
   --webapp-url <url>    адрес Mini App (по умолчанию ${DEFAULT_WEBAPP_URL})
   --chat <id>           задать кнопку меню для чата (можно повторять: --chat 123 --chat 456)
+  --whatsnew            показать текст «что нового» и выйти (ничего не отправляется)
   --help                эта справка
 
 Окружение:
@@ -41,11 +57,12 @@ const USAGE = `Бот-лаунчер SelfCRM.
 const MENU_BUTTON_TEXT = 'Открыть SelfCRM'
 
 function parseArgs(argv) {
-  const args = { setup: false, help: false, webappUrl: null, chats: [] }
+  const args = { setup: false, help: false, whatsnew: false, webappUrl: null, chats: [] }
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === '--setup') args.setup = true
     else if (arg === '--help' || arg === '-h') args.help = true
+    else if (arg === '--whatsnew') args.whatsnew = true
     else if (arg === '--webapp-url') args.webappUrl = argv[++i] ?? null
     else if (arg === '--chat') {
       const chatId = Number(argv[++i])
@@ -105,6 +122,97 @@ function webAppUrl(args) {
   return args.webappUrl || process.env.WEBAPP_URL || DEFAULT_WEBAPP_URL
 }
 
+// Последний опубликованный релиз Android-версии. Черновики и пререлизы GitHub в /latest
+// не отдаёт, поэтому в ответе всегда то, что реально вышло. Ошибка — на совести вызывающего.
+async function latestRelease() {
+  if (releaseCache.value && Date.now() - releaseCache.at < RELEASE_CACHE_MS) return releaseCache.value
+  const response = await fetch(`${RELEASES_API}/latest`, {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': GITHUB_USER_AGENT },
+  })
+  if (!response.ok) throw new Error(`GitHub releases: HTTP ${response.status}`)
+  const release = await response.json()
+  if (!release?.tag_name) throw new Error('GitHub releases: пустой ответ')
+  releaseCache = { at: Date.now(), value: release }
+  return release
+}
+
+// Описание релиза — markdown, а бот отправляет сообщения без parse_mode. Разметку снимаем:
+// заголовки и списки остаются читаемыми, а **звёздочки** и `кавычки` в чат не попадают.
+function markdownToText(markdown) {
+  return String(markdown ?? '')
+    .replace(/```[a-z]*\n?/gi, '')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/^\s*[-*]\s+/gm, '• ')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+    .replace(/^\s*-{3,}\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+// Лимит сообщения Telegram — 4096 символов; оставляем запас на заголовок и подписи.
+function truncate(text, limit) {
+  return text.length <= limit ? text : `${text.slice(0, limit).trimEnd()}…`
+}
+
+function formatDate(iso) {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime())
+    ? iso
+    : date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+}
+
+// «Что нового»: changelog последнего релиза. Отдельно проговаривается главное для Mini App —
+// он берётся с GitHub Pages и обновляется сам, поэтому обновлять вручную нечего.
+function whatsnewMessage(release) {
+  const lines = ['🚀 Что нового', '', release.name || `SelfCRM ${release.tag_name}`]
+  if (release.published_at) lines.push(`Опубликовано: ${formatDate(release.published_at)}`)
+  lines.push('', truncate(markdownToText(release.body), 3200) || 'Описание релиза пустое — подробности на странице релиза.', '')
+  lines.push(
+    'Mini App открывается с GitHub Pages и обновляется сам: новая версия уже внутри —',
+    'обновлять или переустанавливать ничего не нужно.',
+  )
+  return lines.join('\n')
+}
+
+function whatsnewKeyboard(url, releaseUrl) {
+  return {
+    inline_keyboard: [
+      [{ text: MENU_BUTTON_TEXT, web_app: { url } }],
+      [{ text: 'Релиз на GitHub', url: releaseUrl }],
+    ],
+  }
+}
+
+async function sendWhatsnew(chatId, token, url) {
+  try {
+    const release = await latestRelease()
+    await call(
+      'sendMessage',
+      {
+        chat_id: chatId,
+        text: whatsnewMessage(release),
+        reply_markup: whatsnewKeyboard(url, release.html_url || RELEASES_URL),
+      },
+      token,
+    )
+  } catch (e) {
+    // Сеть и лимит запросов GitHub — не повод молчать: даём ссылку на релизы.
+    console.error(`Список изменений не получен: ${scrub(e.message)}`)
+    await call(
+      'sendMessage',
+      {
+        chat_id: chatId,
+        text: ['Список изменений не удалось получить с GitHub.', `Страница релизов: ${RELEASES_URL}`].join('\n'),
+        reply_markup: keyboard(url),
+      },
+      token,
+    )
+  }
+}
+
 // Тексты бота: обычный SelfCRM, который просто открывается внутри Telegram.
 function startMessage() {
   return [
@@ -122,6 +230,10 @@ function helpMessage(url) {
     'SelfCRM — справка',
     '',
     'Кнопка «Открыть SelfCRM» запускает приложение.',
+    '',
+    'Команды бота:',
+    '/whatsnew — что нового в последней версии;',
+    '/help — эта справка.',
     '',
     'Внутри приложения:',
     '• Клиенты и история заказов клиента;',
@@ -177,6 +289,12 @@ async function onUpdate(update, token, url) {
 
   if (command === '/help') {
     await call('sendMessage', { chat_id: message.chat.id, text: helpMessage(url) }, token)
+    return
+  }
+
+  // «Что нового»: бот читает последний релиз Android-версии и присылает changelog.
+  if (command === '/whatsnew') {
+    await sendWhatsnew(message.chat.id, token, url)
     return
   }
 
@@ -242,6 +360,7 @@ async function setup(token, url, chats) {
     {
       commands: [
         { command: 'start', description: 'Открыть SelfCRM' },
+        { command: 'whatsnew', description: 'Что нового в SelfCRM' },
         { command: 'help', description: 'Справка' },
       ],
     },
@@ -324,6 +443,12 @@ async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help) {
     console.log(USAGE)
+    return
+  }
+
+  // Предпросмотр текста «что нового»: ни токена, ни обращения к Telegram — только GitHub.
+  if (args.whatsnew) {
+    console.log(whatsnewMessage(await latestRelease()))
     return
   }
 

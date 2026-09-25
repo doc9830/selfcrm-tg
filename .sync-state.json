@@ -1,0 +1,12 @@
+{
+  "upstream": "doc9830/SelfCRM",
+  "branch": "main",
+  "commit": "38959c9e7a9bd0c3ed5282af3438ae6d0b934e59",
+  "tag": "v1.5.0",
+  "syncedAt": "2026-09-25",
+  "lastSync": {
+    "applied": 0,
+    "conflicts": 0,
+    "deferred": 0
+  }
+}

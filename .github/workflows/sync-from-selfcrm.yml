@@ -1,0 +1,113 @@
+name: Sync from SelfCRM
+
+# Автопорт новых функций Android-версии (doc9830/SelfCRM) в этот репозиторий.
+# Логика переноса — scripts/sync-from-selfcrm.mjs: файл без локальных правок перематывается
+# на новую версию upstream, файл с адаптацией под Telegram не трогается и попадает в отчёт.
+# Итог — pull request, а не прямая правка main, поэтому перенос всегда видно и его можно
+# не мерджить. Правило и список общих файлов — docs/UPSTREAM_SYNC.md.
+
+on:
+  # Регулярная проверка: Android-версия обновляется примерно раз в неделю.
+  schedule:
+    - cron: '0 6 * * 1'
+  # Ручной запуск: сразу после релиза Android-версии или для проверки настройки.
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: 'Ветка или тег SelfCRM (пусто — main)'
+        required: false
+        default: ''
+  # Готово к немедленному переносу: если Android-репозиторий (или его релизный workflow)
+  # дёрнет этот адрес, перенос начнётся сразу, без ожидания расписания:
+  #   curl -X POST -H "Authorization: token <токен>" \
+  #     https://api.github.com/repos/doc9830/selfcrm-tg/dispatches \
+  #     -d '{"event_type":"selfcrm-updated"}'
+  repository_dispatch:
+    types: [selfcrm-updated]
+
+# Ветка для PR и сам PR — всё, больше прав не нужно.
+permissions:
+  contents: write
+  pull-requests: write
+
+# Два переноса одновременно не запускаем: они пишут в одни и те же файлы.
+concurrency:
+  group: sync-from-selfcrm
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      UPSTREAM_DIR: ${{ runner.temp }}/selfcrm-upstream
+      REPORT: ${{ runner.temp }}/sync-report.md
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Клон публичного репозитория: токен не нужен, ничего в upstream не меняется.
+      - name: Клон Android-версии
+        run: |
+          git clone --quiet --branch "${{ inputs.upstream_ref || 'main' }}" \
+            https://github.com/doc9830/SelfCRM.git "$UPSTREAM_DIR"
+          git -C "$UPSTREAM_DIR" log --oneline -1
+
+      - name: План переноса и применение
+        run: node scripts/sync-from-selfcrm.mjs --upstream "$UPSTREAM_DIR" --apply --report "$REPORT"
+
+      # Отчёт пишется всегда: даже если проверки ниже упадут, план видно в сводке запуска.
+      - name: Отчёт в сводку запуска
+        if: always()
+        run: cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Что изменилось
+        id: changes
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Переносить нечего — ветка и PR не нужны."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git status --porcelain
+          fi
+
+      # Проверки идут здесь, а не в отдельном CI: PR, созданные GITHUB_TOKEN, событий не
+      # порождают, поэтому проверять нужно до публикации ветки. Провал — ветки не будет.
+      - name: Проверки (types, тесты, сборка)
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+          npx vitest run
+          npm run build
+
+      - name: Ветка и pull request
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA=$(git -C "$UPSTREAM_DIR" rev-parse --short=12 HEAD)
+          BRANCH="sync/selfcrm-$SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "chore(sync): перенос изменений SelfCRM $SHA"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git push --force-with-lease origin "$BRANCH"
+          else
+            git push --set-upstream origin "$BRANCH"
+          fi
+          TITLE="chore(sync): перенос изменений SelfCRM $SHA"
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            gh pr edit "$BRANCH" --title "$TITLE" --body-file "$REPORT"
+          else
+            gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$REPORT"
+          fi

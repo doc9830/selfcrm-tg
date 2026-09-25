@@ -170,12 +170,17 @@ npm test           # тесты
 npm run typecheck  # проверка типов
 npm run bump -- 1.6.0    # поднять версию в package.json и src/version.ts
 npm run bot              # бот-лаунчер: long polling (@fastcrm_bot)
-npm run bot:setup        # один раз: команды /start, /help и кнопка меню со ссылкой на Mini App
+npm run bot:setup        # один раз: команды /start, /help, /whatsnew и кнопка меню со ссылкой на Mini App
+npm run bot -- --whatsnew  # предпросмотр текста «что нового» (в чат ничего не отправляется)
+git clone https://github.com/doc9830/SelfCRM.git /tmp/selfcrm-upstream
+node scripts/sync-from-selfcrm.mjs --upstream /tmp/selfcrm-upstream   # план переноса из Android-версии
 ```
 
 ### Бот и кнопка меню
 
-Бот нужен только как точка входа: он отвечает на `/start` и `/help` и запускает Mini App.
+Бот нужен только как точка входа: он отвечает на `/start`, `/help` и `/whatsnew` и запускает
+Mini App. `/whatsnew` присылает changelog последнего релиза Android-версии (публичный GitHub API,
+без секретов) — сама Mini App обновляется с Pages, поэтому в ней всегда свежая версия.
 Адрес приложения бот берёт из `WEBAPP_URL`, аргумента `--webapp-url` или значения по умолчанию.
 Если прислать боту файл резервной копии, он ответит подсказкой, как вернуть из неё данные, —
 файл при этом не скачивается и нигде не хранится: он просто остаётся в истории вашего чата.
@@ -243,3 +248,17 @@ WEBAPP_URL=https://новый-адрес/ npm run bot:setup
 [ARCHITECTURE.md](./ARCHITECTURE.md) и [docs/TELEGRAM_ARCHITECTURE.md](./docs/TELEGRAM_ARCHITECTURE.md),
 перенос новых функций Android-версии — в [docs/UPSTREAM_SYNC.md](./docs/UPSTREAM_SYNC.md).
 Сборка APK под Android (та же кодовая база) — в [ANDROID.md](./ANDROID.md).
+
+### Перенос новых функций из Android-версии
+
+Новые функции появляются в `doc9830/SelfCRM`, а Mini App — копия того же кода. Перенос
+автоматизирован: workflow **Sync from SelfCRM** (`.github/workflows/sync-from-selfcrm.yml`)
+идет по расписанию (понедельник) и вручную, сравнивает файлы с предыдущей синхронизацией и
+переносит только те, где нет нашей адаптации под Telegram. Файл с адаптацией не трогается —
+он попадает в отчёт «конфликты» в описании pull request. Проверки (типы, тесты, сборка) идут
+до публикации ветки, так что сломанный перенос в `main` не попадёт.
+
+Что видно в итоге: после мерджа PR деплой Pages пересобирает Mini App, и бот сразу показывает
+новую версию — релизов и переустановки не нужно. Отдельно команда `/whatsnew` в боте
+рассказывает, что нового в последнем релизе Android-версии. Правило переноса и список общих
+файлов — в [docs/UPSTREAM_SYNC.md](./docs/UPSTREAM_SYNC.md).

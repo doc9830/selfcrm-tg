@@ -1,0 +1,44 @@
+name: CI
+
+# Проверки на pull request: перенос из Android-версии, ручные правки, правки документации.
+# PR, созданный workflow синхронизации, событий не порождает (их создаёт GITHUB_TOKEN),
+# поэтому там те же команды выполняются внутри sync-from-selfcrm.yml до публикации ветки —
+# см. docs/UPSTREAM_SYNC.md.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Tests
+        run: npx vitest run
+
+      - name: Build
+        run: npm run build
