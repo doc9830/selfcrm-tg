@@ -42,7 +42,7 @@
 
 | Файл                               | Ответственность                                                                 |
 | ---------------------------------- | ------------------------------------------------------------------------------- |
-| `src/telegram/webapp.ts`           | Типы WebApp API и null-safe доступ: `getTelegramWebApp()`, `isTelegramEnvironment()`, `getTelegramUserId()`, `getTelegramUserLabel()` |
+| `src/telegram/webapp.ts`           | Типы WebApp API и null-safe доступ: `getTelegramWebApp()`, `isTelegramEnvironment()`, `getTelegramUserId()`, `getTelegramUserLabel()`, `openBotChat()` / `TELEGRAM_BOT_URL` |
 | `src/telegram/environment.ts`      | `initTelegramEnvironment()` (`ready()`, `expand()`, слежение за `viewportChanged`, переменные `--tg-height` / `--tg-stable-height`), `syncTelegramChrome()`, `telegramColorScheme()`, `setTelegramBackButtonVisible()`, `onTelegramBackButton()`, `onTelegramThemeChange()` |
 | `src/components/TelegramShell.tsx` | React-мост: вызывает функции выше и связывает события Telegram с роутером (`backTarget`) и темой (`applyTelegramScheme`). Ничего не рендерит |
 | `index.html`                       | Подключение официального `telegram-web-app.js`, CSP, тема до первой отрисовки    |
@@ -124,6 +124,11 @@ SelfCRM → Настройки → Резервная копия → «Созд�
 другое устройство → SelfCRM → «Восстановить из файла» → файл из Telegram
 ```
 
+В том же разделе настроек есть строка «Хранить копию в Telegram» с кнопкой
+«Сохранить и открыть чат»: она сохраняет файл копии и открывает чат с ботом, чтобы не искать
+бота вручную. Файл прикрепляет **пользователь** (📎 → Файл): мини-приложение не может отправить
+файл за него — в Bot API нет метода, который кладёт файл из устройства пользователя в чат.
+
 Роли в этой схеме:
 
 - **Mini App** собирает копию и читает файл при восстановлении. Доступа к истории сообщений у него
@@ -146,9 +151,13 @@ SelfCRM → Настройки → Резервная копия → «Созд�
 - Восстановление — только после подтверждения: приложение показывает, что в копии (клиенты, товары,
   заказы, напоминания), и предупреждает, что текущие данные будут заменены. Кнопка «Создать backup и
   продолжить» сначала скачивает копию текущего состояния.
-- Ссылка на бота в интерфейсе — обычная `https://t.me/fastcrm_bot`, открывается методом
-  `WebApp.openTelegramLink` (в браузере — новой вкладкой). Токен бота в приложение и в bundle не
-  попадает: он нужен только локальному скрипту бота.
+- Ссылка на бота в интерфейсе — обычная `https://t.me/fastcrm_bot`. Открывает её клиент Telegram
+  методом `WebApp.openTelegramLink` (при отсутствии — `openLink`), в браузере — новой вкладкой, в
+  Android-сборке — через `window.open(url, '_system')`. Обычный `window.open(url, '_blank')` в
+  WebView мини-приложения игнорируется: без этих ветвей нажатие заканчивалось только вибрацией, а
+  чат не открывался. Если открыть ссылку не удалось (`openBotChat()` вернул `'failed'`), интерфейс
+  показывает адрес бота текстом, чтобы пользователь нашёл чат сам.
+- Токен бота в приложение и в bundle не попадает: он нужен только локальному скрипту бота.
 
 
 

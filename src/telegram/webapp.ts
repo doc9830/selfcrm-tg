@@ -7,6 +7,8 @@
 // Важно: приложение обязано работать и без Telegram (обычный браузер, Pages),
 // поэтому все функции этого модуля возвращают null вместо исключений.
 
+import { Capacitor } from '@capacitor/core'
+
 export interface TelegramThemeParams {
   bg_color?: string
   text_color?: string
@@ -75,7 +77,10 @@ export interface TelegramWebApp {
   close(): void
   setHeaderColor?(color: string): void
   setBackgroundColor?(color: string): void
-  // Открывает чат Telegram внутри клиента (t.me-ссылки в WebView иначе уводят в браузер).
+  // Открывает ссылку в браузере средствами клиента (t.me-ссылки клиент обрабатывает сам).
+  openLink?(url: string, options?: { try_instant_view?: boolean }): void
+  // Открывает чат/канал Telegram внутри клиента: обычный window.open в WebView
+  // игнорируется, поэтому без этого вызова нажатие выглядит как «ничего не произошло».
   openTelegramLink?(url: string): void
   onEvent(event: string, handler: () => void): void
   offEvent(event: string, handler: () => void): void
@@ -117,14 +122,35 @@ export function getTelegramUserLabel(): string | null {
 // идентификаторов тут нет — это обычная публичная ссылка, её можно показать и в браузере.
 export const TELEGRAM_BOT_URL = 'https://t.me/fastcrm_bot'
 
-// Открывает чат с ботом: в Telegram — средствами клиента (WebApp.openTelegramLink),
-// в браузере — обычной новой вкладкой. Ошибки не показываем: если браузер заблокировал
-// переход, пользователь сам найдёт бота по имени @fastcrm_bot.
-export function openBotChat(url: string = TELEGRAM_BOT_URL): void {
+// Куда в итоге попал пользователь: в клиент Telegram, в системный браузер (Android-сборка)
+// или в новую вкладку браузера. 'failed' — ссылку открыть не удалось, и интерфейс должен
+// сказать об этом текстом: иначе нажатие выглядит как «ничего не произошло».
+export type BotChatTarget = 'telegram' | 'system' | 'browser' | 'failed'
+
+// Открывает чат с ботом.
+//
+// В Telegram Mini App это делает сам клиент через `openTelegramLink`: обычные `window.open`
+// и клики по ссылкам внутри WebView-мини-приложения игнорируются, поэтому раньше нажатие
+// заканчивалось только вибрацией. В Android-сборке (Capacitor) работает только `_system`:
+// с ним ссылка уходит операционной системе, и её открывает приложение Telegram.
+// В браузере — обычная новая вкладка.
+export function openBotChat(url: string = TELEGRAM_BOT_URL): BotChatTarget {
   const app = getTelegramWebApp()
-  if (app?.openTelegramLink) {
-    app.openTelegramLink(url)
-    return
+  if (isTelegramEnvironment()) {
+    if (app?.openTelegramLink) {
+      app.openTelegramLink(url)
+      return 'telegram'
+    }
+    if (app?.openLink) {
+      app.openLink(url)
+      return 'telegram'
+    }
   }
-  if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer')
+  if (typeof window === 'undefined') return 'failed'
+  if (Capacitor.isNativePlatform()) {
+    window.open(url, '_system')
+    return 'system'
+  }
+  const opened = window.open(url, '_blank', 'noopener,noreferrer')
+  return opened ? 'browser' : 'failed'
 }

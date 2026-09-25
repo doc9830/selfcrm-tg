@@ -14,7 +14,7 @@ import { parseAddresses, saveAddresses } from '../db/addresses'
 import { seedDemo } from '../db/seed'
 import { useData } from '../state/DataContext'
 import { useTheme } from '../state/ThemeContext'
-import { openBotChat } from '../telegram/webapp'
+import { openBotChat, TELEGRAM_BOT_URL } from '../telegram/webapp'
 import { emptyContractor, type Contractor } from '../types'
 import { INN_LENGTHS, KPP_LENGTHS, OGRN_LENGTHS, hasValidDigitLength, isPhoneValid } from '../utils/input'
 import { Capacitor } from '@capacitor/core'
@@ -148,6 +148,30 @@ export function Settings() {
       setBackupNote(`Копия сохранена: ${backupFileName()}`)
     } catch (e) {
       setBackupNote(e instanceof Error ? e.message : 'Не удалось сохранить файл')
+    }
+  }
+
+  // «Хранить копию в Telegram»: делаем всё, что может приложение, — сохраняем файл копии
+  // и открываем чат с ботом. Прикрепить файл в чате должен пользователь: мини-приложение
+  // не имеет доступа к истории сообщений (файл отправляет не оно, а сам пользователь).
+  const handleTelegramCopy = async () => {
+    setBackupNote(null)
+    try {
+      await downloadBackup(db)
+    } catch (e) {
+      setBackupNote(e instanceof Error ? e.message : 'Не удалось сохранить файл')
+      return
+    }
+    const name = backupFileName()
+    setBackupNote(
+      `Копия сохранена: ${name}. В чате с ботом прикрепите файл: 📎 → Файл — он останется в истории сообщений`,
+    )
+    // Ссылку открывает клиент Telegram (или система в Android-сборке): в WebView обычный
+    // переход по ссылке игнорируется, и без этого нажатие выглядело бы как «ничего не вышло».
+    if (openBotChat() === 'failed') {
+      window.alert(
+        `Не удалось открыть чат. Найдите бота по адресу ${TELEGRAM_BOT_URL} и прикрепите файл ${name} из «Загрузок»`,
+      )
     }
   }
 
@@ -378,12 +402,19 @@ export function Settings() {
           <div>
             <div className="settings-row-title">Хранить копию в Telegram</div>
             <div className="settings-row-desc">
-              Отправьте файл копии в чат с ботом — он останется в истории чата и его можно
-              будет скачать на новом устройстве
+              Кнопка сохранит файл копии на устройство и откроет чат с ботом — прикрепите файл
+              в чате сами: 📎 → Файл → SelfCRM_backup_….json. Копия останется в истории чата,
+              откуда её можно скачать на новом устройстве. Отправить файл за вас приложение не
+              может: у мини-приложения нет доступа к переписке
             </div>
           </div>
-          <Button size="sm" variant="secondary" icon="telegram" onClick={() => openBotChat()}>
-            Чат с ботом
+          <Button
+            size="sm"
+            variant="secondary"
+            icon="telegram"
+            onClick={() => void handleTelegramCopy()}
+          >
+            Сохранить и открыть чат
           </Button>
         </div>
         {db.hasPreImportBackup() && (
