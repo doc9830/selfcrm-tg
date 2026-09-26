@@ -42,11 +42,11 @@ workflow не упадёт: ветка синхронизации всё рав�
 
 | | |
 | --- | --- |
-| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.5.1` (`d6f738f`) |
+| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.5.2` | 
 | Mini App | `doc9830/selfcrm-tg`, ветка `main` |
-| Совпадает | весь `src/**`, кроме 24 файлов ниже; `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `scripts/bump-version.mjs`, `scripts/telegram-release.mjs`, `release-assets/*` |
+| Совпадает | весь `src/**`, кроме 25 файлов ниже; `public/mailto.html`, `src/db/backupText.ts`; `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `scripts/bump-version.mjs`, `scripts/telegram-release.mjs`, `release-assets/*` |
 
-**Файлы с локальной адаптацией (24)** — их придётся сливать вручную, если upstream их тронет:
+**Файлы с локальной адаптацией (25)** — их придётся сливать вручную, если upstream их тронет:
 
 | Файл | Чем отличается |
 | --- | --- |
@@ -63,6 +63,7 @@ workflow не упадёт: ветка синхронизации всё рав�
 | `src/pdf/documents.ts` (+ `src/pdf/documents.test.ts`) | отдача документа браузеру вместо файловой системы |
 | `src/db/addresses.ts`, `src/db/addresses.test.ts` | `readUserAddresses()` — отличает свою базу адресов от демо-набора |
 | `src/db/backup.ts` | сохранение файла копии: веб-загрузка и `Share` вместо `Filesystem` |
+| `src/db/backup.test.ts` | проверки формата копии, облака и BOM; проверка записи файла с `Encoding.UTF8` живёт в версии этого теста в upstream |
 | `index.html` | CSP, `telegram-web-app.js`, тема до первой отрисовки |
 | `package.json` | версия и состав зависимостей Telegram-слоя |
 | `.gitignore`, `.env.example` | локальные файлы протокола и бота, переменные сборки Mini App |
@@ -74,6 +75,9 @@ workflow не упадёт: ветка синхронизации всё рав�
 ```text
 src/telegram/**                     слой Telegram WebApp
 src/components/TelegramShell.tsx    мост React ↔ события Telegram
+src/components/SupportBanner.tsx    плашка «Поддержите разработку» на главном экране
+src/utils/support.ts (+ тест)       правила показа плашки, суммы и ссылки на счета
+src/db/supportState.ts (+ тест)     хранение состояния плашки: облако Telegram или localStorage
 src/db/backupFormat.ts (+ тесты)    формат файла копии v1 и его разбор
 public/sw.js                        service worker: офлайн-оболочка страницы
 docs/TELEGRAM_ARCHITECTURE.md       эксплуатация Mini App
@@ -103,6 +107,24 @@ scripts/sync-from-selfcrm.mjs       перенос изменений upstream
 
 Повторный перенос по тому же коммиту (правка `src/utils/feedback.ts` после первого прогона)
 занял один запуск скрипта: два файла перемотались сами, лишних конфликтов не появилось.
+
+### Пример: перенос 1.5.1 → 1.5.2 (копии, обратная связь, поддержка)
+
+* **перенесено как есть (общие файлы):** `src/db/backupText.ts` (новый модуль подготовки текста
+  копии: BOM и пробелы по краям), `src/db/database.ts` (+ `database.test.ts`) — понятное
+  сообщение вместо технического «Unexpected token»; `src/utils/feedback.ts` (+ тест) — письмо
+  отдаётся странице-мосту вместо `mailto:`; `public/mailto.html` (новая страница) — общий файл
+  обеих версий;
+* **слито вручную:** `src/db/backup.ts` (та же правка, что в upstream: `Encoding.UTF8` при
+  записи файла), `src/db/backupFormat.ts` (разбор через `parseBackupJson`), `src/db/backup.test.ts`
+  (тесты BOM остались здесь, проверка записи файла — в upstream), `src/index.css`, `src/App.tsx`,
+  `README.md`, `docs/*`;
+* **появилось только здесь:** плашка поддержки (`SupportBanner.tsx`, `utils/support.ts`,
+  `db/supportState.ts` с тестами), команды бота `/support` и `/paysupport`, ссылки на счета.
+
+Практический приём для общих файлов: править их в upstream и переносить патчем
+(`git diff -- <файлы>` → `git apply` в этом репозитории) — тогда расхождения остаются только
+там, где они действительно нужны.
 
 ## 2. Правило минимальной дивергенции
 
