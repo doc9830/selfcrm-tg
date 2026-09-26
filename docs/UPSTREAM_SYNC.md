@@ -3,7 +3,7 @@
 Этот репозиторий (`doc9830/selfcrm-tg`) — копия Android-проекта `doc9830/SelfCRM`,
 адаптированная под Telegram Mini App по отдельному техзаданию (в репозиторий оно не входит
 и хранится локально). Новые функции появляются в Android-репозитории, и их нужно переносить
-сюда. Документ фиксирует, насколько копии разошлись (замер 26.09.2026: обе версии — 1.6.1),
+сюда. Документ фиксирует, насколько копии разошлись (замер 26.09.2026: обе версии — 1.7.0),
 правило минимальной дивергенции и три способа переносить изменения дальше.
 
 ## Статус
@@ -43,12 +43,12 @@ workflow не упадёт: ветка синхронизации всё рав�
 
 | | |
 | --- | --- |
-| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.6.1` | 
+| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.7.0` | 
 | Mini App | `doc9830/selfcrm-tg`, ветка `main` |
-| `src/**` | 70 файлов в upstream, 92 здесь: 51 совпадает, 19 с локальной адаптацией, 22 только здесь |
+| `src/**` | 78 файлов в upstream, 102 здесь: 59 совпадает, 19 с локальной адаптацией, 24 только здесь |
 | Совпадает вне `src/` | 46 файлов: `public/mailto.html`, `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `package-lock.json`, `LICENSE`, `release-assets/**` (по `v1.5.0` включительно), `scripts/bump-version.mjs`, `scripts/telegram-release.mjs`, `scripts/fixtures/*`, `scripts/shots/*` (съёмка скриншотов: клиент DevTools, демо-база, оптимизация кадров), `android/**` кроме ассетов значка |
 | Только здесь вне `src/` | `public/route.html` — страница-мост для маршрута (в Android-версии системный выбор навигатора даёт `geo:`-intent Capacitor, а мини-приложению нужна страница в браузере клиента); `public/sw.js`, `docs/TELEGRAM_ARCHITECTURE.md`, `docs/UPSTREAM_SYNC.md`, `scripts/telegram-bot.mjs`, `scripts/set-webhook.mjs`, `worker/`, `wrangler.toml`, `scripts/sync-from-selfcrm.mjs`, `.github/workflows/ci.yml`, `.github/workflows/deploy-worker.yml`, `.github/workflows/sync-from-selfcrm.yml`, `.github/workflows/telegram-release.yml.disabled`, `.sync-state.json`, `android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml` (передний план адаптивного значка — в upstream он не нужен, там знак рисует `scripts/make-icons.py`) |
-| Только в upstream | `.github/workflows/telegram-release.yml`, `scripts/make-icons.py` и обложки `release-assets/v1.5.1`, `release-assets/v1.5.2`, `release-assets/v1.6.0`, `release-assets/v1.6.1`: здесь релизы не публикуются, поэтому обложек для новых версий нет |
+| Только в upstream | `.github/workflows/telegram-release.yml`, `scripts/make-icons.py` и обложки `release-assets/v1.5.1`, `release-assets/v1.5.2`, `release-assets/v1.6.0`, `release-assets/v1.6.1`, `release-assets/v1.7.0`: здесь релизы не публикуются, поэтому обложек для новых версий нет |
 
 **Файлы с локальной адаптацией** — 19 в `src/**` (все перечислены ниже) и вне `src/`:
 `index.html`, `package.json`, `.gitignore`, `.env.example`, `README.md`, `ARCHITECTURE.md`,
@@ -57,7 +57,7 @@ workflow не упадёт: ветка синхронизации всё рав�
 
 | Файл | Чем отличается |
 | --- | --- |
-| `src/main.tsx` | регистрация service worker (`public/sw.js`) для офлайн-запуска |
+| `src/main.tsx` | регистрация service worker (`public/sw.js`) для офлайн-запуска и моста отчёта (`registerTelegramReportFiles()`, `src/telegram/files.ts`) |
 | `src/App.tsx` | подключение `TelegramShell`; маршрут `/feedback` приезжает из upstream, но вставляется вручную |
 | `src/components/Icons.tsx` | иконки страницы чека (`print`, `share`, `link`) |
 | `src/state/ThemeContext.tsx` | тема Telegram синхронизируется с темой приложения |
@@ -84,7 +84,7 @@ workflow не упадёт: ветка синхронизации всё рав�
 **Файлы только здесь** (upstream не должен их перезаписывать):
 
 ```text
-src/telegram/**                     слой Telegram WebApp
+src/telegram/**                     слой Telegram WebApp (включая files.ts — отчёт временной ссылкой)
 src/components/TelegramShell.tsx    мост React ↔ события Telegram
 src/components/SupportBanner.tsx    плашка «Поддержите разработку» на главном экране
 src/utils/support.ts (+ тест)       правила показа плашки, суммы и ссылки на счета
@@ -145,14 +145,36 @@ scripts/sync-from-selfcrm.mjs       перенос изменений upstream
 (`git diff -- <файлы>` → `git apply` в этом репозитории) — тогда расхождения остаются только
 там, где они действительно нужны.
 
+### Пример: перенос 1.6.1 → 1.7.0 (отчёт в Excel и «К оплате»)
+
+Запуск 26.09.2026 (`babd21944c..334e650f0d`) — первая проверка правила минимальной дивергенции
+на большой функции:
+
+* **перенесено автоматически (17 файлов):** весь общий слой отчёта
+  (`src/reports/report.ts`, `xlsx.ts`, `delivery.ts`, `export.ts` с тестами — 7 файлов),
+  экран `src/screens/Debts.tsx`, изменения `src/screens/Statistics.tsx` (кнопка «Экспорт в
+  Excel»), `src/screens/Dashboard.tsx` (плашка «К оплате»), `src/utils/payments.ts` (+ тест),
+  `src/utils/orders.ts` (+ тест), `src/utils/links.ts`, `src/utils/back.ts` (+ тест);
+* **ни одной новой адаптации:** `Statistics.tsx` остался байт в байт таким же, как в
+  Android-версии, потому что доставку файла выбирает общая функция `planReportDelivery`, а
+  мост Telegram платформа ставит сама — `registerTelegramReportFiles()` в `src/main.tsx`
+  (файл уже был в списке адаптаций). Это ровно тот случай, ради которого слой Telegram держится
+  отдельно: про WebView клиента знает только `src/telegram/files.ts`;
+* **слито вручную (4 файла):** `src/App.tsx` (маршрут `/debt` рядом с чеками и `TelegramShell`),
+  `src/index.css` (стили `.debt-*` и тёмная тема), `package.json` (+ `write-excel-file`) и
+  `package-lock.json`;
+* **появилось только здесь:** `src/telegram/files.ts` (+ тест) — загрузка файла в хранилище
+  Worker'а и скачивание клиентом, `worker/src/files.ts` (+ тест) — сами маршруты `/files`,
+  привязка KV `REPORT_FILES` в `wrangler.toml`.
+
 ## 2. Правило минимальной дивергенции
 
 Список из 19 файлов `src/**` (плюс девять файлов вне `src/`) — это цена адаптации: чем он
 длиннее, тем чаще синхронизация упирается в ручное слияние. Поэтому:
 
 - Telegram-логику складываем в отдельные модули (`src/telegram/**`, `TelegramShell.tsx`),
-  а не размазываем по общим файлам. Именно поэтому 51 файл `src/**` совпадает с upstream байт
-  в байт (это 73% от 70 файлов `src/**` в upstream);
+  а не размазываем по общим файлам. Именно поэтому 59 файлов `src/**` совпадают с upstream байт
+  в байт (это 76% от 78 файлов `src/**` в upstream);
 - правка в файле из списка «совпадает с upstream» — исключительный случай: каждый такой файл
   становится ещё одной точкой конфликта;
 - обратный перенос полезен тоже: наши доработки копий (`src/db/backupFormat.ts`, предпросмотр

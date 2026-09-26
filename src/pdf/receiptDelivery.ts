@@ -129,10 +129,13 @@ export async function shareReceiptLink(url: string, text: string): Promise<Recei
 // и как отдельное действие: если выбор чата не открылся, ссылку вставляют в сообщение
 // руками — иначе нажатие «Чек (PDF)» заканчивается ничем.
 export function copyReceiptLink(url: string, text: string): Promise<boolean> {
-  return copyText(`${text}\n${url}`)
+  return copyTextToClipboard(`${text}\n${url}`)
 }
 
-async function copyText(text: string): Promise<boolean> {
+// Копирование текста в буфер обмена: один и тот же путь для чека и для ссылки на
+// файл отчёта (см. src/telegram/files.ts). Вне защищённого контекста и без прав
+// буфер обмена недоступен — тогда возвращается false, и интерфейс говорит об этом.
+export async function copyTextToClipboard(text: string): Promise<boolean> {
   if (typeof navigator === 'undefined' || !navigator.clipboard) return false
   try {
     await navigator.clipboard.writeText(text)

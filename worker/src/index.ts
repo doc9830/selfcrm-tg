@@ -8,6 +8,8 @@
 //
 // Роуты:
 //   POST /telegram/webhook — обновления Telegram (проверка X-Telegram-Bot-Api-Secret-Token);
+//   POST /files            — временный файл (отчёт из мини-приложения) → ссылка на скачивание;
+//   GET  /files/<id>       — скачивание временного файла (worker/src/files.ts);
 //   GET  /                 — проверка, что Worker развёрнут (текст, без секретов).
 //
 // Ответ Worker — это подтверждение доставки для Telegram: HTTP 200 означает «обновление
@@ -25,6 +27,7 @@
 // поэтому 5xx здесь правильнее.
 
 import { WEBHOOK_PATH } from './config'
+import { handleFiles } from './files'
 import { handleUpdate, type TelegramUpdate } from './handler'
 import type { Deps, Env } from './telegram'
 import { scrub } from './telegram'
@@ -35,6 +38,12 @@ const SECRET_HEADER = 'X-Telegram-Bot-Api-Secret-Token'
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
+
+    // Временные файлы (отчёт в Excel из мини-приложения): отдельный слой, который
+    // ничего не знает про Telegram. null означает «адрес не наш» — тогда работают
+    // роуты бота ниже.
+    const files = await handleFiles(request, env)
+    if (files) return files
 
     // Проверка развёртывания: удобно открыть в браузере после `wrangler deploy`.
     if (url.pathname === '/' && request.method === 'GET') {

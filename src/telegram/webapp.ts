@@ -78,6 +78,13 @@ export interface TelegramHapticFeedback {
   selectionChanged(): void
 }
 
+// Параметры скачивания файла клиентом: адрес https: и имя, под которым файл
+// появится в «Загрузках».
+export interface TelegramDownloadFileParams {
+  url: string
+  file_name: string
+}
+
 export interface TelegramWebApp {
   initData: string
   initDataUnsafe: TelegramInitDataUnsafe
@@ -108,6 +115,11 @@ export interface TelegramWebApp {
   // Оплата звёздами Telegram (Bot API 6.1+): клиент показывает свой платёжный лист,
   // а результат отдаёт в callback — строка 'paid', 'cancelled', 'failed' или 'pending'.
   openInvoice?(url: string, callback?: (status: string) => void): void
+  // Скачивание файла по адресу https: (Bot API 8.0+): клиент сам сохраняет файл в
+  // «Загрузки» вместо того, чтобы открывать его страницей. Нужно отчёту: собранный
+  // в мини-приложении `.xlsx` лежит в временном хранилище, а отдать его клиенту
+  // можно только ссылкой — `blob` и `<a download>` WebView клиента игнорирует.
+  downloadFile?(params: TelegramDownloadFileParams, callback?: (status: string) => void): void
   onEvent(event: string, handler: () => void): void
   offEvent(event: string, handler: () => void): void
 }
@@ -225,6 +237,23 @@ export function openExternalLink(url: string): BotChatTarget {
 // Открывает чат с ботом (частный случай внешней ссылки).
 export function openBotChat(url: string = TELEGRAM_BOT_URL): BotChatTarget {
   return openExternalLink(url)
+}
+
+// Просит клиент скачать файл по ссылке (Bot API 8.0+): файл сохраняется в «Загрузки»
+// устройства, а не открывается страницей. Возвращает false, если клиент этого не
+// умеет (старая версия) или приложение открыто вне Telegram — тогда вызывающий сам
+// решает, что делать вместо скачивания (в отчёте это ссылка в браузере и копия в
+// буфер обмена).
+export function downloadTelegramFile(url: string, fileName: string): boolean {
+  const app = getTelegramWebApp()
+  if (!insideTelegramWebView() || !app?.downloadFile) return false
+  try {
+    app.downloadFile({ url, file_name: fileName })
+    return true
+  } catch {
+    // Клиент отказал — это не ошибка приложения: путь доставки выберет вызывающий.
+    return false
+  }
 }
 
 // Оплата звёздами Telegram: ссылку на счёт выдаёт бот (createInvoiceLink), а платёжный лист

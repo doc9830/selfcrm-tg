@@ -21,6 +21,23 @@ preview_urls = false
 [vars]
 WEBAPP_URL = "https://doc9830.github.io/selfcrm-tg/"
 
+# Временные файлы мини-приложения (отчёт в Excel): Workers KV.
+#
+#   POST /files      — положить файл, в ответ приходит ссылка на скачивание
+#   GET  /files/<id> — скачать файл (ссылка живёт час, имя случайное)
+#
+# Отдельное хранилище нужно потому, что в WebView клиента Telegram файл со страницы
+# отдать нечем: страница отдаёт ссылку, а файл лежит в KV. Данных CRM здесь нет —
+# только переданный файл и только до истечения срока (см. worker/src/files.ts).
+#
+# Привязка создаётся один раз и уже создана (npx wrangler kv namespace create REPORT_FILES).
+# Если переносите проект в свой аккаунт Cloudflare — создайте своё хранилище и подставьте
+# его id. Пока привязки нет, Worker отвечает 503, а приложение говорит «выгрузка не
+# настроена» — деплой бота при этом не ломается.
+[[kv_namespaces]]
+binding = "REPORT_FILES"
+id = "fba94f461ff74061befc4d98329a1ba6"
+
 # Логи Worker: Cloudflare → Workers & Pages → selfcrm-bot → Logs.
 [observability]
 enabled = true

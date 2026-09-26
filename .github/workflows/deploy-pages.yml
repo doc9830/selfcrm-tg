@@ -43,6 +43,10 @@ jobs:
           # variables → Actions), а не в исходниках. Если секрет не задан, переменная пустая
           # и подсказки адресов на веб-версии работают по локальной базе.
           VITE_DADATA_TOKEN: ${{ secrets.VITE_DADATA_TOKEN }}
+          # Адрес Worker'а для выгрузки отчёта (POST /files). Секрета в нём нет и
+          # задавать переменную не обязательно: без неё берётся адрес проекта из
+          # src/telegram/files.ts. Нужна, если Worker развёрнут по другому адресу.
+          VITE_WORKER_URL: ${{ vars.VITE_WORKER_URL }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

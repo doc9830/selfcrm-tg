@@ -54,6 +54,7 @@
 | `src/telegram/webapp.ts`           | Типы WebApp API и null-safe доступ: `getTelegramWebApp()`, `isTelegramEnvironment()`, `insideTelegramWebView()`, `openExternalLink()` / `openBotChat()`, `openInvoice()` (оплата звёздами: платёжный лист клиента и статус `paid`/`cancelled`/`failed`), `TELEGRAM_BOT_URL`, `getTelegramUserId()`, `getTelegramUserLabel()` |
 | `src/telegram/environment.ts`      | `initTelegramEnvironment()` (`ready()`, `expand()`, слежение за `viewportChanged`, переменные `--tg-height` / `--tg-stable-height`), `syncTelegramChrome()`, `telegramColorScheme()`, `setTelegramBackButtonVisible()`, `onTelegramBackButton()`, `onTelegramThemeChange()` |
 | `src/telegram/cloudStorage.ts`     | Промисная обёртка над `WebApp.CloudStorage` (Bot API 6.9+): `cloudStorageSupported()`, `cloudStorageAvailability()` (почему облака нет: `ready`, `old-client`, `outside-telegram`), `cloudSetItem()`, `cloudGetItem()`, `cloudGetItems()`, `cloudRemoveItems()`, `cloudGetKeys()`; коды ошибок клиента переводятся в понятный текст |
+| `src/telegram/files.ts`            | Отчёт в Excel: `uploadReportFile()` кладёт файл в хранилище Worker'а (`POST /files`) и получает временную ссылку, `reportFileBridge` отдаёт её клиенту (`downloadFile` → `openLink` → буфер обмена), `registerTelegramReportFiles()` ставит мост в `src/main.tsx` только внутри Telegram (раздел 13) |
 | `src/components/TelegramShell.tsx` | React-мост: вызывает функции выше и связывает события Telegram с роутером (`backTarget`) и темой (`applyTelegramScheme`). Ничего не рендерит |
 | `index.html`                       | Подключение официального `telegram-web-app.js`, CSP, тема до первой отрисовки    |
 | `src/index.css`                    | `--safe-top` / `--safe-bottom` (safe area Telegram → `env(safe-area-inset-*)`), высота окна |
@@ -65,7 +66,8 @@
 | `src/components/SupportBanner.tsx` | Плашка на главном экране: суммы, оплата через `openInvoice`, «×» и благодарность |
 | `scripts/telegram-bot.mjs`         | Утилиты бота: `--setup` (команды `/start`, `/help`, `/whatsnew`, `/support`, `/paysupport`, общая кнопка меню, `--chat <id>` — для чата), `--whatsnew` — предпросмотр текста, `--star-links` — создание ссылок на счета. Long polling удалён: обновления принимает Worker |
 | `scripts/set-webhook.mjs`          | Webhook бота: `--set` (удаляет прежний webhook и ставит новый на адрес Worker), `--info` (`getWebhookInfo`), `--delete`, `--sync-secrets` (залив `BOT_TOKEN` и `WEBHOOK_SECRET` в Cloudflare) |
-| `worker/src/index.ts`              | Вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (при несовпадении — 403), ответ Telegram — HTTP 200, если обновление обработано, и 500, если обработка упала (Telegram повторит доставку); `GET /` — проверка развёртывания |
+| `worker/src/index.ts`              | Вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (при несовпадении — 403), ответ Telegram — HTTP 200, если обновление обработано, и 500, если обработка упала (Telegram повторит доставку); маршруты файлов `POST /files` и `GET /files/<id>` (раздел 13); `GET /` — проверка развёртывания |
+| `worker/src/files.ts`              | Временные файлы: приём (`POST /files` → `{ id, url, expiresIn }`), отдача вложением (`GET /files/<id>`), KV с истечением срока, CORS для адреса Pages, очистка имени и типа (раздел 13) |
 | `worker/src/handler.ts`            | Обработка обновлений: команды, документы, платежи; `pre_checkout_query` подтверждается первым делом и без лишних запросов. Ставит кнопку меню в личном чате |
 | `worker/src/messages.ts`           | Тексты и кнопки бота — перенесены из `scripts/telegram-bot.mjs` без изменений |
 | `worker/src/telegram.ts`           | Вызовы Bot API (`telegram()`), `webAppUrl()`, `scrub()` — токен не попадает в логи и в тексты ошибок |
@@ -372,8 +374,9 @@ Telegram → POST https://selfcrm-bot.<поддомен>.workers.dev/telegram/we
   хранится, ничего не начисляется и не выдаётся — звёзды списывает и зачисляет Telegram, а бот
   только отвечает сообщением. `setChatMenuButton` идемпотентен, `answerPreCheckoutQuery`
   Telegram как раз и повторяет (10 секунд на ответ), `createInvoiceLink` создаёт новую ссылку на
-  тот же счёт, `sendMessage` повторяет то же информационное сообщение. Хранилище (KV) ради
-  дедупликации не нужно: «дубль» здесь — лишнее сообщение, а не дубль платежа.
+  тот же счёт, `sendMessage` повторяет то же информационное сообщение. Хранилище ради
+  дедупликации не нужно: «дубль» здесь — лишнее сообщение, а не дубль платежа (KV заведено
+  только под временные файлы мини-приложения, раздел 13).
 - **Секреты.** `BOT_TOKEN` и `WEBHOOK_SECRET` — секреты Worker (`npx wrangler secret put ...`),
   в репозиторий и в лог они не попадают: любое сообщение об ошибке проходит через `scrub()`.
   `WEBAPP_URL` — обычная переменная из `wrangler.toml`.
@@ -395,4 +398,46 @@ Telegram → POST https://selfcrm-bot.<поддомен>.workers.dev/telegram/we
   `500 Internal Server Error` при **пустой** очереди — безобидный след гонки: `wrangler
   secret put` применяется несколько секунд, и Telegram успел постучаться в версию ещё без
   секрета; Telegram повторяет доставку сам, а счётчик очереди после успеха обнуляется.
+
+## 13. Отчёт в Excel: временная ссылка
+
+Кнопка **«Экспорт в Excel»** на экране статистики собирает `.xlsx` в самом мини-приложении
+(данные никуда не уходят) — но отдать файл странице нечем: WebView клиента Telegram игнорирует и
+blob-ссылки, и `<a download>`, а `WebApp.downloadFile` принимает только адреса `https:`. Чек
+решает это иначе: его данные целиком помещаются в адрес страницы (`#/receipt?d=…`, раздел про
+PDF-чек). Отчёт в адрес не поместить — в нём все заказы, позиции, клиенты и товары, — поэтому
+файл на час ложится в хранилище того же Worker'а, что обслуживает бота:
+
+```text
+SelfCRM (мини-приложение) → POST /files (тело — файл, заголовок X-File-Name)
+      ↓ { id, url, expiresIn }
+WebApp.downloadFile(url) — клиент сохраняет файл в «Загрузки» (Bot API 8.0+)
+   ↳ иначе openLink(url) — файл скачает встроенный браузер клиента
+   ↳ иначе ссылка в буфер обмена (под кнопкой появляется текст об этом)
+```
+
+- **Адреса.** `POST /files` — приём (ответ `{ id, url, expiresIn }`), `GET /files/<id>` — отдача
+  вложением, `OPTIONS /files` — предзапрос браузера: Mini App живёт на GitHub Pages, то есть на
+  другом домене, поэтому Worker отвечает заголовками CORS.
+- **Хранение.** Workers KV, привязка `REPORT_FILES` в `wrangler.toml`, две записи на файл: сам
+  файл и его подпись (имя и тип). Срок — `expirationTtl` в час, удаляет хранилище само; имена
+  постоянных ссылок не существует. Идентификатор — 16 случайных байт в base64url (22 символа),
+  поэтому чужой файл перебором имени не достать; идентификатор формата не совпал — `404`, других
+  ключей хранилища маршрут не читает.
+- **Что не хранится.** Только переданный файл и только до истечения срока. Данных CRM на сервере
+  нет: KV не база приложения, а «полка» для одного файла; лимит размера — 8 МБ, в логе остаётся
+  идентификатор и размер, но не имя и не содержимое.
+- **Очистка имени и типа.** Имя приходит заголовком в percent-encoding, на стороне Worker'а из
+  него убираются пути и служебные символы и ограничивается длина; тип ответа берётся из
+  ограниченного списка (`xlsx`, `pdf`), иначе `application/octet-stream` — со своего адреса нельзя
+  отдавать страницы, которые браузер выполнит.
+- **Имя файла.** Отдаётся как `Content-Disposition: attachment` с именем и в ASCII-виде, и по
+  RFC 5987 (`filename*=UTF-8''…`), поэтому кириллица (`SelfCRM_Отчет_2026-09-01_2026-09-26.xlsx`)
+  читается и браузером, и клиентом Telegram.
+- **Вне Telegram.** Мост регистрируется только внутри клиента (`insideTelegramWebView()`):
+  открытый в браузере адрес Mini App скачивает файл обычным способом, без сервера.
+- **Если хранилища нет.** Worker отвечает `503`, приложение показывает «выгрузка не настроена» —
+  остальные команды бота при этом работают. Само хранилище создаётся один раз:
+  `npx wrangler kv namespace create REPORT_FILES`, id подставляется в `wrangler.toml`.
+
 

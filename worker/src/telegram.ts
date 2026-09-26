@@ -4,9 +4,13 @@
 // в env из Cloudflare Secret и никогда не попадает ни в ответ, ни в лог — все сообщения
 // об ошибках проходят через scrub().
 
+import { FilesEnv } from './files'
+
 // Секреты приходят из Cloudflare: BOT_TOKEN и WEBHOOK_SECRET — через `wrangler secret put`,
 // WEBAPP_URL — обычная переменная из wrangler.toml (см. раздел «Cloudflare» в README).
-export interface Env {
+// REPORT_FILES — хранилище временных файлов (Workers KV): из него мини-приложение
+// получает ссылку на собранный отчёт (см. worker/src/files.ts).
+export interface Env extends FilesEnv {
   BOT_TOKEN: string
   WEBHOOK_SECRET: string
   WEBAPP_URL?: string
