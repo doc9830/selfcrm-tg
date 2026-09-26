@@ -24,8 +24,8 @@
 │  Screens → DataContext → KVStore (localStorage) — копия уходит в облако      │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-Отдельно, на машине разработчика:
-  scripts/telegram-bot.mjs —— long polling @fastcrm_bot: /start, /help, /whatsnew,
+Отдельно, в Cloudflare (worker/src, деплой .github/workflows/deploy-worker.yml):
+  Telegram → POST /telegram/webhook → Worker @fastcrm_bot: /start, /help, /whatsnew,
                               /support и /paysupport (поддержка звёздами Telegram),
                               кнопка «Открыть SelfCRM», ссылки на GitHub, лендинг
                               и группу SelfCRM и подсказка на присланный файл копии
@@ -40,8 +40,9 @@
   первом сообщении пользователя. К ответам он добавляет кнопки со ссылками проекта — GitHub,
   лендинг и группа SelfCRM (в `/help` они же перечислены текстом). Присланный файл копии он не
   скачивает: только подсказывает, как вернуть из него данные. Оплату подтверждает
-  `answerPreCheckoutQuery` (см. раздел 10) — на это у бота 10 секунд, поэтому поддержка
-  работает, пока процесс бота запущен.
+  `answerPreCheckoutQuery` (см. раздел 10) — на это у бота 10 секунд; подтверждение уходит
+  сразу при получении обновления, а Runtime Worker работает постоянно, поэтому поддержка
+  не зависит от того, включён ли компьютер владельца.
 - **GitHub Pages** — доставка статики. Никаких секретов и никаких данных пользователя.
 - **Mini App** — само приложение. Вся логика и все данные — здесь, в хранилище устройства; наружу
   уходит только резервная копия — по кнопке «Сохранить» в облако Telegram (раздел 8).
@@ -62,7 +63,15 @@
 | `src/utils/support.ts`             | Правила показа плашки «Поддержите разработку», состояние, суммы и ссылки на счета (`SUPPORT_INVOICE_LINKS`, обновляются `npm run bot -- --star-links`) |
 | `src/db/supportState.ts`           | Хранение состояния плашки: облако Telegram (`WebApp.CloudStorage`), иначе — localStorage |
 | `src/components/SupportBanner.tsx` | Плашка на главном экране: суммы, оплата через `openInvoice`, «×» и благодарность |
-| `scripts/telegram-bot.mjs`         | Бот-лаунчер: `--setup` (команды `/start`, `/help`, `/whatsnew`, `/support`, `/paysupport`, общая кнопка меню, `--chat <id>` — для чата), `--whatsnew` — предпросмотр текста, `--star-links` — создание ссылок на счета, long polling; к ответам добавляет кнопки со ссылками (GitHub, лендинг, группа SelfCRM), при первом сообщении ставит кнопку меню в чате, на присланный документ отвечает подсказкой о восстановлении, подтверждает оплату (`pre_checkout_query`) и благодарит за неё (`successful_payment`) |
+| `scripts/telegram-bot.mjs`         | Утилиты бота: `--setup` (команды `/start`, `/help`, `/whatsnew`, `/support`, `/paysupport`, общая кнопка меню, `--chat <id>` — для чата), `--whatsnew` — предпросмотр текста, `--star-links` — создание ссылок на счета. Long polling удалён: обновления принимает Worker |
+| `scripts/set-webhook.mjs`          | Webhook бота: `--set` (удаляет прежний webhook и ставит новый на адрес Worker), `--info` (`getWebhookInfo`), `--delete`, `--sync-secrets` (залив `BOT_TOKEN` и `WEBHOOK_SECRET` в Cloudflare) |
+| `worker/src/index.ts`              | Вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (при несовпадении — 403), ответ Telegram — HTTP 200; `GET /` — проверка развёртывания |
+| `worker/src/handler.ts`            | Обработка обновлений: команды, документы, платежи; `pre_checkout_query` подтверждается первым делом и без лишних запросов. Ставит кнопку меню в личном чате |
+| `worker/src/messages.ts`           | Тексты и кнопки бота — перенесены из `scripts/telegram-bot.mjs` без изменений |
+| `worker/src/telegram.ts`           | Вызовы Bot API (`telegram()`), `webAppUrl()`, `scrub()` — токен не попадает в логи и в тексты ошибок |
+| `worker/src/support.ts`, `worker/src/whatsnew.ts` | Счета звёздами (`createInvoiceLink`) и changelog релиза (`api.github.com`) |
+| `wrangler.toml`                    | Настройка Worker: `name`, `main`, `compatibility_date`, переменная `WEBAPP_URL`, логи |
+| `.github/workflows/deploy-worker.yml` | Деплой Worker при push в `main` (секреты: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) |
 | `.github/workflows/deploy-pages.yml` | Сборка и публикация статики на GitHub Pages                                    |
 | `.github/workflows/sync-from-selfcrm.yml` | Перенос новых функций Android-версии: `scripts/sync-from-selfcrm.mjs`, отчёт в PR ([UPSTREAM_SYNC.md](./UPSTREAM_SYNC.md)) |
 | `.github/workflows/ci.yml`         | Типы, тесты и сборка на pull request (PR от синхронизации проверяется внутри своего workflow) |
@@ -73,8 +82,9 @@
 ## 3. Запуск приложения по шагам
 
 1. Пользователь нажимает «Открыть SelfCRM» в боте (или отправляет `/start`). Кнопка берётся из
-   ответа бота на `/start` либо из кнопки меню: общую ставит `npm run bot:setup`, у конкретного
-   человека — сам бот при первом сообщении (общая настройка в Telegram применяется не мгновенно).
+   ответа бота на `/start` либо из кнопки меню: общую ставит `npm run bot:setup`, а в конкретном
+   чате её обновляет Worker при первом сообщении (общая настройка в Telegram применяется не
+   мгновенно). Сам `/start` обрабатывает Worker — компьютер владельца при этом не нужен.
 2. Telegram открывает `https://doc9830.github.io/selfcrm-tg/` в своём WebView.
 3. Инлайн-скрипт в `index.html` до первой отрисовки ставит `data-theme`: выбор пользователя в
    SelfCRM → тема Telegram (`WebApp.colorScheme`) → тема системы. Так нет «мигания» светлой темы.
@@ -319,8 +329,8 @@ Telegram текст честно говорит, что сохранить ко�
 Оплата идёт звёздами Telegram: для цифровых товаров это требование App Store и Play Store —
 другая валюта и сторонние провайдеры запрещены. Порядок такой:
 
-1. ссылки на счета создаёт бот (`createInvoiceLink`, команда `npm run bot -- --star-links`), они
-   лежат в `SUPPORT_INVOICE_LINKS` (`src/utils/support.ts`);
+1. ссылки на счета создаёт бот (`createInvoiceLink` в Worker, для `SUPPORT_INVOICE_LINKS` —
+   командой `npm run bot -- --star-links`), они лежат в `src/utils/support.ts`;
 2. приложение открывает платёжный лист клиента — `openInvoice()` (`WebApp.openInvoice`): статус
    `paid` закрывает плашку навсегда, `cancelled` и `failed` ничего не меняют;
 3. перед оплатой Telegram присылает `pre_checkout_query` — бот отвечает `answerPreCheckoutQuery`
@@ -330,8 +340,45 @@ Telegram текст честно говорит, что сохранить ко�
 4. если оплатить в этом окружении нельзя (браузер, старый клиент) или ссылок нет, плашка
    открывает чат с ботом по `?start=support` — те же счета приходят сообщением.
 
-Важное следствие: подтверждает платёж только бот, поэтому поддержка работает, пока запущен
-`npm run bot` (как и остальные ответы бота).
+Важное следствие: подтверждает платёж Worker (`pre_checkout_query` → `answerPreCheckoutQuery`),
+а он развёрнут постоянно, поэтому поддержка работает и при выключенном компьютере. Если Worker
+не развёрнут или webhook снят (`npm run bot:webhook:info`), платежи подтверждать некому.
 
 
+
+
+## 12. Runtime бота: Cloudflare Worker и webhook
+
+Раньше бот жил в `scripts/telegram-bot.mjs` и получал обновления через long polling
+(`getUpdates`): он отвечал, только пока на машине владельца запущен `npm run bot`. Теперь
+runtime — Cloudflare Worker, а Telegram сам присылает обновления на webhook:
+
+```text
+Telegram → POST https://selfcrm-bot.<поддомен>.workers.dev/telegram/webhook → Worker → Bot API
+```
+
+- **Точка входа.** `worker/src/index.ts`: проверяет путь `POST /telegram/webhook` и заголовок
+  `X-Telegram-Bot-Api-Secret-Token` (должен совпадать с секретом `WEBHOOK_SECRET`), иначе
+  `403 Forbidden` — запрос не обрабатывается. Затем разбирает JSON (ошибка → `400`) и отдаёт
+  обновление в `handleUpdate`. Ответ Telegram — HTTP 200: ошибка обработки пишется в лог
+  (`console.error`), но не превращается в повторную доставку, иначе пользователь получил бы
+  дубли сообщений.
+- **Секреты.** `BOT_TOKEN` и `WEBHOOK_SECRET` — секреты Worker (`npx wrangler secret put ...`),
+  в репозиторий и в лог они не попадают: любое сообщение об ошибке проходит через `scrub()`.
+  `WEBAPP_URL` — обычная переменная из `wrangler.toml`.
+- **Состояния нет.** Worker не хранит ничего между запросами: нет кэша ссылок на счета
+  (создаются на каждый `/support`) и кэша релиза GitHub; кнопка меню в личном чате ставится
+  на каждое сообщение (идемпотентно).
+- **Порядок перехода.** Webhook и `getUpdates` одновременно работать не могут, поэтому
+  `npm run bot:webhook:set` сначала вызывает `deleteWebhook`, затем `setWebhook` (накопленные
+  обновления не теряются: `drop_pending_updates` выключен) и напоминает про секреты Worker.
+- **Диагностика.** `npm run bot:webhook:info` показывает адрес, количество ждущих обновлений
+  и последнюю ошибку доставки с её временем; `GET /` у адреса Worker отвечает текстом
+  `SelfCRM bot webhook works` — значит Worker развёрнут. Если бот молчит на `/start`:
+  проверить адрес и ошибки `getWebhookInfo`, затем логи Worker (`npx wrangler tail` или
+  Cloudflare → Workers & Pages → selfcrm-bot → Logs). Ошибка `403` в логах Telegram означает
+  несовпадение `WEBHOOK_SECRET` у Worker и в webhook. Запись `500 Internal Server Error` при
+  **пустой** очереди — безобидный след гонки: `wrangler secret put` применяется несколько
+  секунд, и Telegram успел постучаться в версию ещё без секрета; Telegram повторяет доставку
+  сам, а счётчик очереди после успеха обнуляется.
 

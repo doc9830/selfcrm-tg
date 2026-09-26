@@ -127,8 +127,8 @@ Telegram не сохраняет файлы, созданные странице
 - Данные Telegram клиент получает, но никуда не передаёт: имя и `id` пользователя используются
   только для подписи резервной копии и идентификации, ключом данных CRM они не являются.
   Подробнее — [docs/TELEGRAM_ARCHITECTURE.md](./docs/TELEGRAM_ARCHITECTURE.md).
-- Токен бота в приложение не попадает: он нужен только локальному скрипту бота
-  (`scripts/telegram-bot.mjs`) и не используется при сборке страницы.
+- Токен бота в приложение не попадает: он нужен только боту — Cloudflare Worker читает его
+  из секрета `BOT_TOKEN` — и не используется при сборке страницы.
 - Единственный внешний запрос с данными CRM — подсказки адресов (Дадата): туда уходит только
   набранный вами адрес, и лишь если ключ `VITE_DADATA_TOKEN` задан при сборке.
 
@@ -232,7 +232,11 @@ npm run build      # production-сборка в dist/
 npm test           # тесты
 npm run typecheck  # проверка типов
 npm run bump -- 1.6.0    # поднять версию в package.json и src/version.ts
-npm run bot              # бот-лаунчер: long polling (@fastcrm_bot)
+npm run worker:dev       # Worker бота локально: http://localhost:8787
+npm run worker:check     # проверка сборки Worker без деплоя (wrangler deploy --dry-run)
+npm run worker:deploy    # развернуть Worker в Cloudflare
+npm run bot:webhook:set  # поставить webhook Telegram на адрес Worker
+npm run bot:webhook:info # куда Telegram присылает обновления (getWebhookInfo)
 npm run bot:setup        # один раз: команды /start, /help, /whatsnew, /support, /paysupport и кнопка меню со ссылкой на Mini App
 npm run bot -- --whatsnew  # предпросмотр текста «что нового» (в чат ничего не отправляется)
 npm run bot -- --star-links  # создать ссылки на оплату звёздами и напечатать блок для src/utils/support.ts
@@ -246,9 +250,21 @@ node scripts/sync-from-selfcrm.mjs --upstream /tmp/selfcrm-upstream   # план
 и `/paysupport` и запускает Mini App. `/whatsnew` присылает changelog последнего релиза
 Android-версии (публичный GitHub API, без секретов) — сама Mini App обновляется с Pages,
 поэтому в ней всегда свежая версия.
-Адрес приложения бот берёт из `WEBAPP_URL`, аргумента `--webapp-url` или значения по умолчанию.
-Если прислать боту файл резервной копии, он ответит подсказкой, как вернуть из неё данные, —
-файл при этом не скачивается и нигде не хранится: он просто остаётся в истории вашего чата.
+Адрес приложения бот берёт из переменной Worker `WEBAPP_URL` (по умолчанию — GitHub Pages
+проекта). Если прислать боту файл резервной копии, он ответит подсказкой, как вернуть из неё
+данные, — файл при этом не скачивается и нигде не хранится: он просто остаётся в истории
+вашего чата.
+
+Runtime бота — **Cloudflare Worker** (`worker/src`), поэтому компьютер владельца может быть
+выключен: Telegram сам присылает обновления на webhook развёрнутого Worker.
+
+```text
+Telegram → HTTPS webhook → Cloudflare Worker → Telegram Bot API
+```
+
+Данные CRM через Worker не проходят: он обслуживает только Bot API. Ни базы, ни резервных
+копий на сервере SelfCRM нет — они остаются на устройстве и в облаке Telegram (раздел 8
+в `docs/TELEGRAM_ARCHITECTURE.md`).
 
 Кроме кнопки запуска бот добавляет к ответам постоянные ссылки: GitHub (исходный код),
 лендинг (возможности и установка) и группа SelfCRM (вопросы и обсуждения). Это константы
@@ -259,19 +275,85 @@ npm run bot:setup        # команды и кнопка меню (общая, 
 npm run bot:setup -- --chat 123456789   # дополнительно кнопка меню для чата
 ```
 
-Кнопка меню ставится в двух местах, потому что Telegram ведёт себя по-разному:
+Кнопка меню (`web_app` → адрес Mini App) ставится общей, для всех пользователей, командой
+`npm run bot:setup`. Telegram применяет её не мгновенно и может ответить `ok`, оставив прежнее
+значение, поэтому скрипт перечитывает кнопку и, если она ещё старая, печатает подсказку —
+значение появится через пару минут.
 
-- **Общая кнопка** (`setChatMenuButton` без `chat_id`) — для всех, кто откроет бота.
-  Telegram обновляет её не мгновенно и может ответить `ok`, оставив прежнее значение, поэтому
-  после настройки скрипт перечитывает кнопку и, если она ещё старая, печатает подсказку —
-  значение появится через пару минут.
-- **Кнопка в чате** (`setChatMenuButton` с `chat_id`) применяется сразу и без оговорок, поэтому
-  запущенный бот ставит её сам при первом сообщении от пользователя. Она видна рядом с полем
-  ввода и не зависит от общей настройки.
+Кнопку в конкретном чате (`setChatMenuButton` с `chat_id`) обновляет сам Worker при первом
+сообщении пользователя: Telegram применяет такую настройку сразу, а у Worker нет состояния
+между запросами, поэтому вызов идемпотентный и стоит одного обращения к Bot API.
 
-Кнопка «Открыть SelfCRM» в ответе на `/start` работает всегда — и без запущенного бота, и если
-общая кнопка меню ещё не применилась. Сам бот при этом должен быть запущен (`npm run bot`),
-иначе `/start` останется без ответа: сервера за приложением нет.
+Кнопка «Открыть SelfCRM» в ответе на `/start` работает всегда — независимо от кнопки меню
+и от того, применялась ли она в этом чате.
+
+### Cloudflare: где живёт бот
+
+Бот работает как Cloudflare Worker с Telegram webhook: пока Worker развёрнут, `/start` и
+остальные команды отвечают и при выключенном компьютере. Файлы:
+
+| Файл | Что это |
+| --- | --- |
+| `worker/src/index.ts` | вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (иначе 403), ответ Telegram — HTTP 200 |
+| `worker/src/handler.ts` | обработка обновлений: команды, документы, платежи |
+| `worker/src/messages.ts` | тексты и кнопки бота (перенесены из `scripts/telegram-bot.mjs` без изменений) |
+| `worker/src/telegram.ts` | вызовы Bot API; токен не попадает ни в ответ, ни в лог (`scrub`) |
+| `worker/src/support.ts`, `worker/src/whatsnew.ts` | счета звёздами и changelog релиза |
+| `wrangler.toml` | имя Worker, точка входа, `WEBAPP_URL`, логи |
+| `scripts/set-webhook.mjs` | установка, проверка и удаление webhook |
+| `.github/workflows/deploy-worker.yml` | деплой Worker при push в `main` |
+
+Что нужно сделать один раз (это единственное, что требует аккаунта Cloudflare):
+
+1. **Аккаунт Cloudflare** — https://dash.cloudflare.com/sign-up (тарифа Free достаточно).
+   В разделе **Workers & Pages** включите поддомен `workers.dev`, если он ещё не включён:
+   адрес Worker будет `https://selfcrm-bot.<поддомен>.workers.dev`. Свой домен, VPS и
+   открытые порты не нужны.
+2. **Account ID** — на странице **Workers & Pages** справа, подпись «Account ID».
+3. **API-токен** для автодеплоя — My Profile → API Tokens → Create Token → шаблон
+   **Edit Cloudflare Workers** (права: Account → Workers Scripts: Edit и Workers KV/Account
+   settings: Read). Домен и DNS не нужны: деплой идёт на `*.workers.dev`.
+4. **Секреты Worker** (в Git не попадают, в бандл Mini App тоже):
+
+```bash
+npx wrangler login                       # один раз: вход в аккаунт Cloudflare
+npx wrangler secret put BOT_TOKEN        # токен @fastcrm_bot от @BotFather
+npm run bot:webhook:set -- --url https://selfcrm-bot.<поддомен>.workers.dev --sync-secrets
+```
+
+`--sync-secrets` заливает в Cloudflare `BOT_TOKEN` из `.env` и сам создаёт `WEBHOOK_SECRET`
+(он записывается в `.env`). Если задавать секреты вручную, значения `BOT_TOKEN` и
+`WEBHOOK_SECRET` в Cloudflare и в `.env` должны совпадать.
+5. **Секреты репозитория** — Settings → Secrets and variables → Actions: `CLOUDFLARE_API_TOKEN`
+   и `CLOUDFLARE_ACCOUNT_ID`. Они нужны только для автодеплоя: без них workflow
+   `deploy-worker.yml` пропускает шаг деплоя и печатает предупреждение.
+6. **Webhook** — `npm run bot:webhook:set` (адрес берётся из `WORKER_URL` в `.env`, записать
+   его можно и через `--url`).
+7. **Проверка** — `npm run bot:webhook:info`, затем `/start` в Telegram при выключенном
+   компьютере.
+
+После деплоя `GET https://selfcrm-bot.<поддомен>.workers.dev/` отвечает текстом
+`SelfCRM bot webhook works` — быстрый способ убедиться, что Worker жив.
+
+Если бот молчит, порядок проверки такой:
+
+1. адрес Worker отвечает `SelfCRM bot webhook works` (значит, Worker развёрнут);
+2. `npm run bot:webhook:info` — адрес совпадает с вашим, `Обновлений в очереди: 0`;
+3. логи Worker: `npx wrangler tail` или Cloudflare → Workers & Pages → selfcrm-bot → **Logs**
+   (там видно `Не удалось обработать обновление: ...`, если Telegram API недоступен).
+
+Запись `Последняя ошибка доставки: Wrong response from the webhook: 500 Internal Server Error`
+при пустой очереди — безобидный след гонки: `wrangler secret put` применяется несколько
+секунд, и Telegram успел постучаться в версию ещё без `WEBHOOK_SECRET` (без секрета Worker
+отвечает 500). Она остаётся как история — после успешной доставки важна именно очередь.
+
+При смене адреса Mini App поменяйте `WEBAPP_URL` в `wrangler.toml`, выполните
+`npm run worker:deploy` и `npm run bot:setup` — кнопка меню указывает на тот же адрес.
+
+Локальная отладка Worker: `npm run worker:dev` (секреты кладутся в `.dev.vars`, файл в Git
+не попадает). Тесты Worker (`worker/src/*.test.ts`) сети не требуют: `fetch` подменяется
+заглушкой.
+
 
 ### Поддержка проекта звёздами
 
@@ -288,9 +370,9 @@ npm run bot:setup -- --chat 123456789   # дополнительно кнопк�
   за него бот благодарит, а в лог пишет `telegram_payment_charge_id` — только с ним можно
   вернуть звёзды (`refundStarPayment`).
 
-Пока процесс бота не запущен, подтверждать платежи некому: оплата в это время не пройдёт.
-Ссылки на счета выдаёт Telegram, обновить их можно одной командой — она напечатает готовый
-блок для `src/utils/support.ts`:
+Платежи подтверждает Worker, а он работает постоянно, — поэтому поддержка доступна и при
+выключенном компьютере. Ссылки на счета выдаёт Telegram; обновить их можно одной командой —
+она напечатает готовый блок для `src/utils/support.ts`:
 
 ```bash
 npm run bot -- --star-links
@@ -306,12 +388,15 @@ npm run bot -- --star-links
 
 Каждый push в `main` собирает проект и публикует страницу на GitHub Pages
 (`.github/workflows/deploy-pages.yml`) — это и есть адрес Mini App. Сборка не требует токена
-бота: `BOT_TOKEN` нужен только локальному запуску бота и в бандл не попадает.
+бота: `BOT_TOKEN` хранится только в Cloudflare (секрет Worker) и в локальном `.env`, в бандл
+он не попадает. Тот же push в `main` деплоит Worker (`.github/workflows/deploy-worker.yml`).
 
-Адрес страницы зашит в кнопку меню бота, поэтому при смене домена выполните:
+Адрес страницы зашит в кнопку меню бота и в `WEBAPP_URL` Worker, поэтому при смене домена
+выполните:
 
 ```bash
-WEBAPP_URL=https://новый-адрес/ npm run bot:setup
+# 1. адрес Worker: WEBAPP_URL в wrangler.toml → npm run worker:deploy
+WEBAPP_URL=https://новый-адрес/ npm run bot:setup   # 2. кнопки бота и заодно проверить адрес
 ```
 
 ### Ключ подсказок адресов

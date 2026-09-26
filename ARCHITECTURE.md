@@ -43,8 +43,8 @@
 Telegram-клиент
    │  inline-кнопка web_app (и кнопка меню)
    ▼
-scripts/telegram-bot.mjs (@fastcrm_bot, локально)
-   │  один раз: setMyCommands + setChatMenuButton
+Cloudflare Worker (worker/src, @fastcrm_bot)  ← Telegram webhook, работает постоянно
+   │  один раз: setMyCommands + setChatMenuButton (scripts/telegram-bot.mjs --setup)
    ▼
 https://doc9830.github.io/selfcrm-tg/   ← dist/ из .github/workflows/deploy-pages.yml
    │  index.html → telegram-web-app.js → src/main.tsx
@@ -61,7 +61,11 @@ SelfCRM (React) → KVStore (localStorage) — все данные остают�
 | `index.html`                        | подключение `telegram-web-app.js`, CSP, тема до отрисовки    |
 | `src/index.css`                     | `--safe-*` и `--tg-stable-height` вместо жёстких отступов    |
 | `public/sw.js`                      | офлайн-оболочка страницы                                     |
-| `scripts/telegram-bot.mjs`          | бот: `/start`, `/help`, `/whatsnew`, кнопка «Открыть SelfCRM» и кнопка меню (общая и в чате) |
+| `scripts/telegram-bot.mjs`          | утилиты бота: `--setup` (команды, кнопка меню), `--whatsnew` (предпросмотр), `--star-links` (ссылки на счета) |
+| `scripts/set-webhook.mjs`           | webhook бота: установка на Worker, `getWebhookInfo`, удаление |
+| `worker/src/`                       | Cloudflare Worker: приём обновлений по webhook, команды, платежи (`/start`, `/help`, `/whatsnew`, `/support`, `/paysupport`) |
+| `wrangler.toml`                     | настройка Worker: имя, точка входа, `WEBAPP_URL`              |
+| `.github/workflows/deploy-worker.yml` | деплой Worker при push в `main`                            |
 | `.github/workflows/sync-from-selfcrm.yml` | перенос новых функций Android-версии: `scripts/sync-from-selfcrm.mjs` → ветка и PR с отчётом |
 | `.github/workflows/ci.yml`          | типы, тесты и сборка на pull request                        |
 
@@ -681,14 +685,15 @@ Android и в браузере; в чат она отправляется с п�
   обновлений) и `suggestions.dadata.ru` (подсказки адресов), объекты запрещены
   (`object-src 'none'`), `base-uri` и `form-action` ограничены.
 - **Telegram: токен бота не попадает в приложение.** Mini App не обращается к Bot API, поэтому
-  `BOT_TOKEN` не нужен ни на странице, ни в сборке: он читается только локальным
-  `scripts/telegram-bot.mjs` из переменной окружения или `.env` (файл вне git). Переменной с
-  префиксом `VITE_` для токена не существует — иначе он оказался бы в бандле, который
-  скачивает любой пользователь.
-- **Telegram: адрес Mini App живёт в кнопке меню.** `WEBAPP_URL` / `--webapp-url` нужны только
-  боту; на страницу адрес не влияет. Общую кнопку меню ставит `npm run bot:setup`, в конкретном
-  чате — сам запущенный бот при первом сообщении: Telegram применяет общую настройку не сразу и
-  может ответить `ok`, оставив прежнее значение, поэтому скрипт перечитывает результат.
+  `BOT_TOKEN` не нужен ни на странице, ни в сборке: его читает Cloudflare Worker из секрета
+  (`npx wrangler secret put BOT_TOKEN`), а локальные утилиты — из переменной окружения или
+  `.env` (файл вне git). Переменной с префиксом `VITE_` для токена не существует — иначе он
+  оказался бы в бандле, который скачивает любой пользователь.
+- **Telegram: адрес Mini App живёт в кнопке меню и в переменной Worker.** `WEBAPP_URL`
+  (`wrangler.toml`) и `--webapp-url` утилит нужны только боту; на страницу адрес не влияет.
+  Общую кнопку меню ставит `npm run bot:setup`, а в конкретном чате её обновляет Worker при
+  первом сообщении: Telegram применяет общую настройку не сразу и может ответить `ok`, оставив
+  прежнее значение, поэтому скрипт перечитывает результат.
 - **Telegram: непроверенные данные не используются как ключи.** `initData` подписывает Telegram,
   но проверить подпись можно только на сервере, которого у SelfCRM нет. Поэтому `initDataUnsafe`
   (имя и `id` пользователя) применяется лишь для подписи резервной копии и отображения; данные

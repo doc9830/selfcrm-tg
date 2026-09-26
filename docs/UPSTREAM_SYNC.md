@@ -16,7 +16,7 @@
 | Состояние: до какого коммита upstream синхронизировано | `.sync-state.json` |
 | Автозапуск (по расписанию и вручную), проверки, ветка и PR | `.github/workflows/sync-from-selfcrm.yml` |
 | Проверки на любые pull request | `.github/workflows/ci.yml` |
-| Команда `/whatsnew` в боте (changelog релиза) | `scripts/telegram-bot.mjs` |
+| Команда `/whatsnew` в боте (changelog релиза) | `worker/src/whatsnew.ts` и тексты в `worker/src/messages.ts` (предпросмотр без отправки: `npm run bot -- --whatsnew`) |
 
 Как пользоваться:
 
@@ -47,7 +47,7 @@ workflow не упадёт: ветка синхронизации всё рав�
 | Mini App | `doc9830/selfcrm-tg`, ветка `main` |
 | `src/**` | 70 файлов в upstream, 92 здесь: 51 совпадает, 19 с локальной адаптацией, 22 только здесь |
 | Совпадает вне `src/` | 46 файлов: `public/mailto.html`, `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `package-lock.json`, `LICENSE`, `release-assets/**` (по `v1.5.0` включительно), `scripts/bump-version.mjs`, `scripts/telegram-release.mjs`, `scripts/fixtures/*`, `scripts/shots/*` (съёмка скриншотов: клиент DevTools, демо-база, оптимизация кадров), `android/**` кроме ассетов значка |
-| Только здесь вне `src/` | `public/route.html` — страница-мост для маршрута (в Android-версии системный выбор навигатора даёт `geo:`-intent Capacitor, а мини-приложению нужна страница в браузере клиента); `public/sw.js`, `docs/TELEGRAM_ARCHITECTURE.md`, `docs/UPSTREAM_SYNC.md`, `scripts/telegram-bot.mjs`, `scripts/sync-from-selfcrm.mjs`, `.github/workflows/ci.yml`, `.github/workflows/sync-from-selfcrm.yml`, `.github/workflows/telegram-release.yml.disabled`, `.sync-state.json`, `android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml` (передний план адаптивного значка — в upstream он не нужен, там знак рисует `scripts/make-icons.py`) |
+| Только здесь вне `src/` | `public/route.html` — страница-мост для маршрута (в Android-версии системный выбор навигатора даёт `geo:`-intent Capacitor, а мини-приложению нужна страница в браузере клиента); `public/sw.js`, `docs/TELEGRAM_ARCHITECTURE.md`, `docs/UPSTREAM_SYNC.md`, `scripts/telegram-bot.mjs`, `scripts/set-webhook.mjs`, `worker/`, `wrangler.toml`, `scripts/sync-from-selfcrm.mjs`, `.github/workflows/ci.yml`, `.github/workflows/deploy-worker.yml`, `.github/workflows/sync-from-selfcrm.yml`, `.github/workflows/telegram-release.yml.disabled`, `.sync-state.json`, `android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml` (передний план адаптивного значка — в upstream он не нужен, там знак рисует `scripts/make-icons.py`) |
 | Только в upstream | `.github/workflows/telegram-release.yml`, `scripts/make-icons.py` и обложки `release-assets/v1.5.1`, `release-assets/v1.5.2`, `release-assets/v1.6.0`: здесь релизы не публикуются, поэтому обложек для новых версий нет |
 
 **Файлы с локальной адаптацией** — 19 в `src/**` (все перечислены ниже) и вне `src/`:
@@ -97,9 +97,13 @@ src/screens/ReceiptView.tsx         экран чека в мини-прилож
 public/sw.js                        service worker: офлайн-оболочка страницы
 docs/TELEGRAM_ARCHITECTURE.md       эксплуатация Mini App
 docs/UPSTREAM_SYNC.md               этот документ
-scripts/telegram-bot.mjs            бот-лаунчер @fastcrm_bot
+scripts/telegram-bot.mjs            утилиты бота @fastcrm_bot (setup, предпросмотр «что нового», ссылки на счета)
+scripts/set-webhook.mjs             установка, проверка и удаление webhook бота
+worker/src/                         runtime бота: Cloudflare Worker с приёмом обновлений по webhook
+wrangler.toml                       настройка Worker (имя, точка входа, WEBAPP_URL)
 scripts/sync-from-selfcrm.mjs       перенос изменений upstream
 .github/workflows/sync-from-selfcrm.yml, .github/workflows/ci.yml
+.github/workflows/deploy-worker.yml
 .github/workflows/telegram-release.yml.disabled
 .sync-state.json, .env (не коммитится)
 ```
@@ -213,11 +217,13 @@ Workflow `.github/workflows/sync-from-selfcrm.yml` — запуск по рас�
   бот показывает новую версию сам: никаких действий в боте не требуется.
 - **Сообщения бота** — команда `/whatsnew` (реализована): бот читает последний релиз
   `doc9830/SelfCRM` через публичный GitHub API и присылает название версии, changelog
-  и кнопки «Открыть SelfCRM» и «Релиз на GitHub». Новых секретов не нужно; ответ кэшируется
-  на 10 минут, чтобы не расходовать лимит запросов GitHub. Текст можно посмотреть без
-  отправки: `npm run bot -- --whatsnew`.
-- **Push-уведомление «вышла новая версия»** потребует постоянно работающего процесса бота:
-  сейчас `scripts/telegram-bot.mjs` запускается вручную на машине разработчика.
+  и кнопки «Открыть SelfCRM» и «Релиз на GitHub». Новых секретов не нужно; кэша нет —
+  Worker не хранит состояние между запросами, а лимит GitHub (60 запросов в час без токена)
+  для ручной команды не проблема: если лимит исчерпан, бот присылает ссылку на страницу
+  релизов. Текст можно посмотреть без отправки: `npm run bot -- --whatsnew`.
+- **Push-уведомление «вышла новая версия»** стало возможным: бот работает не на машине
+  разработчика, а в Cloudflare Worker и принимает обновления круглосуточно, поэтому сообщение
+  о новом релизе можно отправлять из workflow без запущенного компьютера.
 
 ## 7. Итог
 

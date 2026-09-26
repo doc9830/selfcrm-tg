@@ -6,7 +6,8 @@
 > как часть исходного проекта, но запуска не будет. Релизы Mini App не публикуются: страница
 > обновляется сама при пуше в `main` через `.github/workflows/deploy-pages.yml`, а уведомления о
 > версиях в Mini App нет (см. [TELEGRAM_ARCHITECTURE.md](./TELEGRAM_ARCHITECTURE.md)). Токен бота в
-> Mini App не используется — его читает только локальный `scripts/telegram-bot.mjs`.
+> Mini App не используется — его читает только бот: Cloudflare Worker (секрет `BOT_TOKEN`) и
+> локальные утилиты `scripts/telegram-bot.mjs` в `.env`.
 
 При публикации GitHub Release в Telegram автоматически уходит пост:
 название версии, changelog из описания релиза, кнопка скачивания APK и кнопка перехода
