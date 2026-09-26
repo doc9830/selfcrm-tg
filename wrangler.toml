@@ -1,0 +1,26 @@
+# Cloudflare Worker бота @fastcrm_bot: приём обновлений Telegram через webhook.
+#
+# Деплой руками:        npx wrangler deploy
+# Деплой автоматически: push в main → .github/workflows/deploy-worker.yml
+# Локально:             npm run worker:dev
+#
+# Секретов в этом файле нет и быть не должно. BOT_TOKEN и WEBHOOK_SECRET задаются один раз:
+#   npx wrangler secret put BOT_TOKEN
+#   npx wrangler secret put WEBHOOK_SECRET
+# (то же самое одной командой с машины разработчика: npm run bot:webhook:set -- --sync-secrets)
+name = "selfcrm-bot"
+main = "worker/src/index.ts"
+compatibility_date = "2026-09-01"
+
+# Preview-адреса версий (https://<версия>-selfcrm-bot.<поддомен>.workers.dev) для бота не нужны:
+# он принимает запросы только по адресу webhook, а лишние публичные адреса — только шум.
+preview_urls = false
+
+# Адрес Mini App, который открывает кнопка бота. Это не секрет: значение видно и в Telegram.
+# Оно подставляется в кнопку «Открыть SelfCRM», кнопку меню и в /help.
+[vars]
+WEBAPP_URL = "https://doc9830.github.io/selfcrm-tg/"
+
+# Логи Worker: Cloudflare → Workers & Pages → selfcrm-bot → Logs.
+[observability]
+enabled = true

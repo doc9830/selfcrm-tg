@@ -5,6 +5,8 @@ dist-ssr
 .env
 .env.*
 !.env.example
+# Секреты локального запуска Worker (`npx wrangler dev`) — как .env, в git не попадают.
+.dev.vars
 .DS_Store
 .idea
 .vscode/*

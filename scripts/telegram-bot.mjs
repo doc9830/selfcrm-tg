@@ -1,16 +1,23 @@
 #!/usr/bin/env node
-// Бот-лаунчер SelfCRM (@fastcrm_bot).
+// Утилиты бота @fastcrm_bot: настройка команд и кнопки меню, предпросмотр «что нового»
+// и создание ссылок на счета звёздами.
+//
+// Runtime бота — не здесь, а в Cloudflare Worker (worker/src, деплой `npm run worker:deploy`):
+// Telegram присылает обновления в Worker по webhook, поэтому компьютер может быть выключен.
+// Раньше этот файл держал long polling (getUpdates) и бот отвечал, только пока запущен
+// `npm run bot`; теперь такой режим не нужен и удалён — иначе два приёмника обновлений
+// мешали бы друг другу (см. docs/TELEGRAM_ARCHITECTURE.md).
 //
 // Роль бота — только точка входа: он показывает кнопку «Открыть SelfCRM», которая
 // запускает Telegram Mini App. Никакой CRM-логики в боте нет (см. PROMPT §15):
 // клиенты, заказы и товары живут внутри Mini App и в локальном хранилище устройства.
 //
-// Зависимостей нет: используются встроенные в Node fetch и AbortController.
+// Зависимостей нет: используется встроенный в Node fetch.
 //
 // Примеры:
-//   node scripts/telegram-bot.mjs --setup    # один раз: команды /start, /help и кнопка меню
-//   node scripts/telegram-bot.mjs            # запустить бота (long polling)
-//   node scripts/telegram-bot.mjs --whatsnew # посмотреть текст «что нового» без отправки
+//   node scripts/telegram-bot.mjs --setup      # один раз: команды и кнопка меню
+//   node scripts/telegram-bot.mjs --whatsnew   # посмотреть текст «что нового» без отправки
+//   node scripts/telegram-bot.mjs --star-links # ссылки на счета для src/utils/support.ts
 //
 // Команда /whatsnew читает последний релиз Android-версии (doc9830/SelfCRM) через публичный
 // GitHub API и присылает changelog. Сам Mini App берётся с GitHub Pages и обновляется сам,
@@ -25,9 +32,9 @@
 // Ссылки на те же счета открывает плашка «Поддержите разработку» в мини-приложении;
 // печатает их `npm run bot -- --star-links` (готовый блок для src/utils/support.ts).
 //
-// Кнопка меню ставится в двух местах: как общая (по умолчанию, для всех пользователей) и
-// у конкретного чата — сразу после первого сообщения боту. Так кнопка появляется даже там,
-// где Telegram не применил общую настройку (см. menuButtonHint).
+// Кнопка меню ставится один раз и общая (для всех пользователей) — `--setup`. Кнопку в
+// конкретном чате Telegram применяет сразу, поэтому Worker обновляет её сам при первом
+// сообщении пользователя (см. worker/src/handler.ts, ensureChatMenuButton).
 //
 // Токен читается из окружения BOT_TOKEN или из локального .env (в git не попадает).
 // В логи токен не выводится: любые сообщения об ошибках проходят через scrub().
@@ -57,7 +64,11 @@ const GROUP_URL = 'https://t.me/selfcrmtg'
 const RELEASE_CACHE_MS = 10 * 60 * 1000
 let releaseCache = { at: 0, value: null }
 
-const USAGE = `Бот-лаунчер SelfCRM.
+const USAGE = `Утилиты бота SelfCRM (@fastcrm_bot).
+
+Runtime бота живёт в Cloudflare Worker (worker/src): обновления Telegram приходят туда
+по webhook, поэтому постоянно включённый компьютер не нужен. Этот скрипт — только утилиты
+настройки и предпросмотра.
 
 Аргументы:
   --setup               задать команды бота и кнопку меню со ссылкой на Mini App
@@ -66,6 +77,11 @@ const USAGE = `Бот-лаунчер SelfCRM.
   --whatsnew            показать текст «что нового» и выйти (ничего не отправляется)
   --star-links          создать ссылки на оплату звёздами и напечатать для src/utils/support.ts
   --help                эта справка
+
+Webhook (адрес Worker, секрет, проверка):
+  npm run bot:webhook:set      установить webhook на Worker
+  npm run bot:webhook:info     куда Telegram шлёт обновления
+  npm run bot:webhook:delete   удалить webhook
 
 Окружение:
   BOT_TOKEN      токен @fastcrm_bot (иначе берётся из .env в корне проекта)
@@ -547,18 +563,6 @@ async function setMenuButton(token, chatId, url) {
   await call('setChatMenuButton', payload, token)
 }
 
-// Кнопка меню конкретному человеку: Telegram применяет её сразу, поэтому она ставится при
-// первом же сообщении боту — для каждого чата один раз за запуск.
-async function ensureChatMenuButton(chat, token, url, done) {
-  if (!chat || chat.type !== 'private' || done.has(chat.id)) return
-  done.add(chat.id)
-  try {
-    await setMenuButton(token, chat.id, url)
-  } catch (e) {
-    console.error(`Кнопка меню в чате не обновилась: ${scrub(e.message)}`)
-  }
-}
-
 // Команды бота и кнопка меню: после этого Mini App доступен из меню чата.
 async function setup(token, url, chats) {
   await call(
@@ -590,63 +594,22 @@ async function setup(token, url, chats) {
   }
 }
 
-async function runPolling(token, url) {
-  const me = await call('getMe', {}, token)
-  console.log(`SelfCRM-бот @${me.username} запущен. Mini App: ${url}. Ctrl+C — остановить.`)
-
-  const controller = new AbortController()
-  const stop = () => {
-    controller.abort()
-    console.log('Остановка бота.')
-  }
-  process.on('SIGINT', stop)
-  process.on('SIGTERM', stop)
-
-  // Чаты, которым кнопка меню уже выставлена в этом запуске.
-  const menuButtons = new Set()
-
-  let offset = 0
-  while (!controller.signal.aborted) {
-    let updates
-    try {
-      updates = await withSignal(
-        // pre_checkout_query — подтверждение оплаты звёздами: без него платёж не пройдёт,
-        // а сообщение о нём приходит не как message, поэтому запрашиваем оба вида.
-        call('getUpdates', { offset, timeout: 30, allowed_updates: ['message', 'pre_checkout_query'] }, token),
-        controller.signal,
-      )
-    } catch (e) {
-      if (controller.signal.aborted) break
-      console.error(`Ошибка связи с Telegram: ${scrub(e.message)}`)
-      await sleep(3000)
-      continue
-    }
-
-    for (const update of updates) {
-      offset = update.update_id + 1
-      try {
-        await ensureChatMenuButton(update.message?.chat, token, url, menuButtons)
-        await onUpdate(update, token, url)
-      } catch (e) {
-        console.error(`Не удалось ответить на сообщение: ${scrub(e.message)}`)
-      }
-    }
-  }
-}
-
-// Ожидание ответа Telegram прерывается по Ctrl+C: без этого бот не завершался бы
-// до конца длинного опроса getUpdates.
-function withSignal(promise, signal) {
-  if (signal.aborted) return Promise.reject(new Error('остановлено'))
-  return new Promise((resolve, reject) => {
-    const abort = () => reject(new Error('остановлено'))
-    signal.addEventListener('abort', abort, { once: true })
-    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
-  })
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+// Раньше здесь был long polling: бот сам забирал обновления через getUpdates и работал только
+// пока запущен процесс. Теперь обновления приходят в Cloudflare Worker по webhook, поэтому
+// этого режима нет: одновременно webhook и getUpdates работать не могут, а Telegram отдаёт
+// обновление только одному приёмнику.
+function runtimeMoved() {
+  console.log('Бот работает в Cloudflare Worker и в запуске с этой машины не нуждается.')
+  console.log('')
+  console.log('Что делать:')
+  console.log('  1. развернуть Worker:            npm run worker:deploy')
+  console.log('  2. поставить webhook на Worker:  npm run bot:webhook:set')
+  console.log('  3. проверить, куда идут обновления: npm run bot:webhook:info')
+  console.log('')
+  console.log('Полезное здесь:')
+  console.log('  npm run bot:setup            команды бота и кнопка меню (один раз)')
+  console.log('  npm run bot -- --whatsnew    предпросмотр текста «что нового»')
+  console.log('  npm run bot -- --star-links  ссылки на счета для src/utils/support.ts')
 }
 
 async function main() {
@@ -674,15 +637,15 @@ async function main() {
     return
   }
 
-  const token = resolveToken()
-  const url = webAppUrl(args)
-
   if (args.setup) {
+    const token = resolveToken()
+    const url = webAppUrl(args)
     await setup(token, url, args.chats)
     return
   }
 
-  await runPolling(token, url)
+  // Без аргументов — напоминание, что бот переехал в Cloudflare Worker.
+  runtimeMoved()
 }
 
 main().catch((e) => {
