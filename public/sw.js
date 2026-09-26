@@ -9,13 +9,27 @@
 //   * файлы сборки (assets/*, sw.js, telegram-web-app.js) — кэш, в фоне обновляем.
 // Имена файлов сборки содержат хеш, поэтому новый релиз просто добавит новые файлы,
 // а index.html всегда берётся из сети, пока она есть.
+//
+// Отдельно кэшируется страница-мост обратной связи (mailto.html): её открывает системный
+// браузер из мини-приложения, и без сети она всё равно нужна — иначе вместо письма
+// откроется пустая страница или оболочка приложения.
 
-const CACHE_NAME = 'selfcrm-tg-shell-v1'
+const CACHE_NAME = 'selfcrm-tg-shell-v2'
 const TELEGRAM_SCRIPT = 'https://telegram.org/js/telegram-web-app.js'
 const SHELL_URL = './index.html'
+// Файлы, которые нужны всегда: их кладём в кэш сразу при установке service worker.
+const PRECACHE = [SHELL_URL, './mailto.html']
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(self.skipWaiting())
+  event.waitUntil(
+    (async () => {
+      const cache = await caches.open(CACHE_NAME)
+      // Ошибка загрузки любого файла не должна отменять установку: приложение обязано
+      // работать и без этого кэша.
+      await Promise.all(PRECACHE.map((url) => cache.add(url).catch(() => undefined)))
+      await self.skipWaiting()
+    })(),
+  )
 })
 
 self.addEventListener('activate', (event) => {
