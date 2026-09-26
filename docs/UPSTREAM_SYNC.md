@@ -58,14 +58,14 @@ workflow не упадёт: ветка синхронизации всё рав�
 | `src/components/UpdateToast.tsx` | проверка обновлений только на нативной платформе |
 | `src/version.ts` | репозиторий обновлений: `doc9830/selfcrm-tg` вместо `doc9830/SelfCRM` |
 | `src/index.css` | safe area Telegram (`--tg-safe-area-inset-*`), высота окна |
-| `src/screens/Settings.tsx` | раздел Telegram, облачная копия, предпросмотр перед импортом |
+| `src/screens/Settings.tsx` | раздел Telegram, облачная копия, предпросмотр перед импортом; служебные копии в мини-приложении отдаются иначе, чем файлом: «Вернуть» (состояние до импорта возвращается прямо в приложении) и «Скопировать» (повреждённые данные текстом) вместо «Скачать» |
 | `src/screens/OrderDetail.tsx` | чек и «Поделиться» вместо сохранения файла |
 | `src/utils/navigation.ts`, `src/utils/navigation.test.ts` | распознавание адреса клиента внутри Telegram и `openExternalLink` для ссылок; внутри мини-приложения маршрут открывает страница-мост `public/route.html` (`routeBridgeUrl()`): клиент пропускает через `openLink` только `http`/`https`, поэтому `geo:` отдаёт браузер клиента — Android показывает системный выбор навигатора, как в upstream; в браузере адрес отдаётся Яндекс.Картам поиском (`?text=<адрес>`), маршрутная ссылка — только по координатам |
 | `public/route.html` | страница-мост для маршрута: передаёт `geo:0,0?q=<адрес>` системе и показывает список навигаторов, если системный выбор не появился |
 | `src/pdf/documents.ts` (+ `src/pdf/documents.test.ts`) | отдача документа браузеру вместо файловой системы |
 | `src/db/addresses.ts`, `src/db/addresses.test.ts` | `readUserAddresses()` — отличает свою базу адресов от демо-набора |
-| `src/db/backup.ts` | сохранение файла копии: веб-загрузка и `Share` вместо `Filesystem` |
-| `src/db/backup.test.ts` | проверки формата копии, облака и BOM; проверка записи файла с `Encoding.UTF8` живёт в версии этого теста в upstream |
+| `src/db/backup.ts` | сохранение файла копии: веб-загрузка и `Share` вместо `Filesystem`; имена служебных копий (`preImportFileName()`, `corruptedFileName()`) и разбор копии перед импортом (`parsePreImportCopy()`): в мини-приложении её отдают не файлом, а возвратом данных на месте |
+| `src/db/backup.test.ts` | проверки формата копии, облака и BOM, возврата копии до импорта и имён служебных копий; проверка записи файла с `Encoding.UTF8` живёт в версии этого теста в upstream |
 | `index.html` | CSP, `telegram-web-app.js`, тема до первой отрисовки |
 | `package.json` | версия и состав зависимостей Telegram-слоя |
 | `.gitignore`, `.env.example` | локальные файлы протокола и бота, переменные сборки Mini App |

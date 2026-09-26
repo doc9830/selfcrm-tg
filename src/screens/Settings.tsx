@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, Card, Field, Input, IntegerInput, Modal, PhoneInput, cx } from '../components/ui'
 import { Icon } from '../components/Icons'
-import { applyBackup, downloadBackup, downloadJson, hasLocalData, readBackupFile } from '../db/backup'
+import {
+  applyBackup,
+  corruptedFileName,
+  downloadBackup,
+  downloadJson,
+  hasLocalData,
+  parsePreImportCopy,
+  preImportFileName,
+  readBackupFile,
+} from '../db/backup'
 import {
   backupFileName,
   describeCounts,
@@ -22,7 +31,7 @@ import {
 import { seedDemo } from '../db/seed'
 import { useData } from '../state/DataContext'
 import { useTheme } from '../state/ThemeContext'
-import { openBotChat, TELEGRAM_BOT_URL } from '../telegram/webapp'
+import { insideTelegramWebView, openBotChat, TELEGRAM_BOT_URL } from '../telegram/webapp'
 import { emptyContractor, type Contractor } from '../types'
 import { INN_LENGTHS, KPP_LENGTHS, OGRN_LENGTHS, hasValidDigitLength, isPhoneValid } from '../utils/input'
 import { Capacitor } from '@capacitor/core'
@@ -33,11 +42,6 @@ import { FEEDBACK_EMAIL } from '../utils/feedback'
 import { feedbackLink } from '../utils/links'
 
 const isDev = import.meta.env.DEV
-
-// Метка времени для имён скачиваемых файлов (как в src/db/backup.ts).
-function fileStamp(): string {
-  return new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
-}
 
 // Дата облачной копии для подписи в настройках: «25.09.2026, 12:30».
 function cloudDateLabel(iso: string): string {
@@ -115,6 +119,12 @@ export function Settings() {
   // как пропавшая функция: 'old-client' — обновить Telegram, 'outside-telegram' — открыть из бота.
   const cloudAvailability = cloudBackupAvailability()
   const cloudAvailable = cloudAvailability === 'ready'
+  // Открыто внутри WebView клиента Telegram (мини-приложение или его встроенный браузер):
+  // файл из страницы там сохранить нечем — клиент игнорирует blob-ссылки и `<a download>`
+  // (см. downloadJson). Служебные копии (до импорта, повреждённые данные) в этом окружении
+  // показываются не кнопкой «Скачать», а тем, что действительно работает: возвратом копии
+  // прямо в приложении и копированием текста в буфер обмена.
+  const telegram = insideTelegramWebView()
   // Переход из уведомления о новой версии: «/settings?section=updates».
   const highlightUpdates = route.query.get('section') === 'updates'
 
@@ -387,15 +397,39 @@ export function Settings() {
   // Копии данных, сохранённые приложением: нечитаемые значения и состояние перед импортом.
   const corruptedKeys = db.listCorruptedBackups()
   const loadWarning = db.getLoadWarning()
+  // Самая свежая копия нечитаемых данных: её и показывают, и отдают пользователю.
+  const readCorruptedCopy = () => {
+    const [key] = corruptedKeys
+    return key ? db.readCorruptedBackup(key) : null
+  }
 
   const handleDownloadCorrupted = async () => {
-    const [key] = corruptedKeys
-    const raw = key ? db.readCorruptedBackup(key) : null
+    const raw = readCorruptedCopy()
     if (!raw) {
       window.alert('Копия повреждённых данных не найдена')
       return
     }
-    await runExport(() => downloadJson(raw, `selfcrm-corrupt-${fileStamp()}.json`))
+    await runExport(() => downloadJson(raw, corruptedFileName()))
+  }
+
+  // Там, где файл сохранить нельзя (Telegram), та же копия уходит текстом в буфер обмена:
+  // ровно для этого она и хранится — «открыть или прислать для разбора».
+  const handleCopyCorrupted = async () => {
+    const raw = readCorruptedCopy()
+    if (!raw) {
+      window.alert('Копия повреждённых данных не найдена')
+      return
+    }
+    let copied = false
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(raw)
+        copied = true
+      }
+    } catch {
+      copied = false
+    }
+    window.alert(copied ? 'Текст копии скопирован — вставьте его в сообщение' : 'Не удалось скопировать текст')
   }
 
   const handleDownloadPreImport = async () => {
@@ -404,7 +438,34 @@ export function Settings() {
       window.alert('Копия данных до импорта не найдена')
       return
     }
-    await runExport(() => downloadJson(json, `selfcrm-before-import-${fileStamp()}.json`))
+    await runExport(() => downloadJson(json, preImportFileName()))
+  }
+
+  // Возврат копии, сделанной перед импортом или сбросом, прямо в приложении. Так она
+  // возвращается в мини-приложении Telegram: файл там сохранить нечем, а сама копия лежит
+  // в хранилище приложения. Показ состава и подтверждение — те же, что при импорте файла.
+  const handleRestorePreImport = () => {
+    const fileName = preImportFileName()
+    try {
+      const parsed = parsePreImportCopy(db)
+      if (!parsed) {
+        window.alert('Копия данных до импорта не найдена')
+        return
+      }
+      setRestore({
+        status: 'ready',
+        fileName,
+        parsed,
+        summary: summarizeBackup(parsed),
+        busy: false,
+      })
+    } catch (e) {
+      setRestore({
+        status: 'invalid',
+        fileName,
+        message: e instanceof Error ? e.message : 'Не удалось прочитать копию',
+      })
+    }
   }
 
   return (
@@ -421,17 +482,30 @@ export function Settings() {
             <div>
               <div className="settings-row-title">Скачать повреждённые данные</div>
               <div className="settings-row-desc">
-                Файл с исходным содержимым хранилища — его можно открыть или прислать для разбора
+                {telegram
+                  ? 'Текст с исходным содержимым хранилища — его можно скопировать и прислать для разбора'
+                  : 'Файл с исходным содержимым хранилища — его можно открыть или прислать для разбора'}
               </div>
             </div>
-            <Button
-              size="sm"
-              variant="secondary"
-              icon="download"
-              onClick={() => void handleDownloadCorrupted()}
-            >
-              Скачать
-            </Button>
+            {telegram ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="doc"
+                onClick={() => void handleCopyCorrupted()}
+              >
+                Скопировать
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="download"
+                onClick={() => void handleDownloadCorrupted()}
+              >
+                Скачать
+              </Button>
+            )}
           </div>
           <div className="settings-row">
             <div>
@@ -504,7 +578,9 @@ export function Settings() {
               </div>
               <div className="settings-row-desc">
                 {cloudAvailability === 'old-client'
-                  ? 'Ваш клиент Telegram не умеет облачное хранилище (эта возможность появилась в Bot API 6.9). Обновите Telegram — и копию можно будет сохранять в аккаунт и восстанавливать на другом телефоне. Пока доступна копия файлом.'
+                  ? `Ваш клиент Telegram не умеет облачное хранилище (эта возможность появилась в Bot API 6.9). Обновите Telegram — и копию можно будет сохранять в аккаунт и восстанавливать на другом телефоне. ${
+                      telegram ? 'Пока сохранить копию в этом клиенте нечем.' : 'Пока доступна копия файлом.'
+                    }`
                   : 'Облачное хранилище Telegram доступно только приложению, открытому внутри Telegram. Запустите SelfCRM из бота — тогда копия будет привязана к аккаунту и её можно будет восстановить на новом телефоне. Здесь, в браузере или Android-сборке, доступна копия файлом.'}
               </div>
             </div>
@@ -627,8 +703,10 @@ export function Settings() {
           </Button>
         </div>
         {/* Облака нет (браузер, Android-сборка, старый клиент Telegram) — остаётся путь
-            «файл + чат с ботом»: файл сохраняет устройство, а отправляет его пользователь. */}
-        {!cloudAvailable && (
+            «файл + чат с ботом»: файл сохраняет устройство, а отправляет его пользователь.
+            В WebView клиента Telegram файла не будет вовсе, поэтому там строка не показывается:
+            иначе она обещала бы шаг, которого пользователь не сможет сделать. */}
+        {!cloudAvailable && !telegram && (
           <div className="settings-row">
             <div>
               <div className="settings-row-title">Копия файлом в чат с ботом</div>
@@ -654,17 +732,32 @@ export function Settings() {
             <div>
               <div className="settings-row-title">Данные до импорта</div>
               <div className="settings-row-desc">
-                Копия состояния базы перед последним импортом или сбросом
+                {telegram
+                  ? 'Копия состояния базы перед последним импортом или сбросом. Вернётся прямо в приложении: файл в Telegram сохранить нечем'
+                  : 'Копия состояния базы перед последним импортом или сбросом'}
               </div>
             </div>
-            <Button
-              size="sm"
-              variant="secondary"
-              icon="download"
-              onClick={() => void handleDownloadPreImport()}
-            >
-              Скачать
-            </Button>
+            {/* Куда попадёт копия, зависит от окружения: в браузере и Android-сборке файл
+                скачивается, в Telegram — возвращается на замену (см. handleRestorePreImport). */}
+            {telegram ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="history"
+                onClick={handleRestorePreImport}
+              >
+                Вернуть
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="download"
+                onClick={() => void handleDownloadPreImport()}
+              >
+                Скачать
+              </Button>
+            )}
           </div>
         )}
         {corruptedKeys.length > 0 && (
@@ -675,14 +768,25 @@ export function Settings() {
                 Сохранённые копии значений, которые не удалось прочитать: {corruptedKeys.length}
               </div>
             </div>
-            <Button
-              size="sm"
-              variant="secondary"
-              icon="download"
-              onClick={() => void handleDownloadCorrupted()}
-            >
-              Скачать
-            </Button>
+            {telegram ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="doc"
+                onClick={() => void handleCopyCorrupted()}
+              >
+                Скопировать
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="download"
+                onClick={() => void handleDownloadCorrupted()}
+              >
+                Скачать
+              </Button>
+            )}
           </div>
         )}
       </Card>

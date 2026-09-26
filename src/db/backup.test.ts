@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Client, Contractor, Product } from '../types'
 import { APP_VERSION } from '../version'
 import { demoAddresses } from './addresses'
-import { applyBackup, hasLocalData, restoreBackup } from './backup'
-import { BACKUP_FORMAT, buildBackupJson, parseBackup } from './backupFormat'
+import { applyBackup, corruptedFileName, hasLocalData, parsePreImportCopy, preImportFileName, restoreBackup } from './backup'
+import { BACKUP_FORMAT, buildBackupJson, parseBackup, summarizeBackup } from './backupFormat'
 import { Database } from './database'
 import { MemoryStore } from './kvstore'
 
@@ -217,5 +217,34 @@ describe('backup: повреждённый файл не трогает данн
 
     expect(parsed.legacy).toBe(true)
     expect(target.getClients()).toHaveLength(1)
+  })
+
+  it('копия перед импортом разбирается как обычная копия и возвращается в базу', () => {
+    // Так копия возвращается в мини-приложении Telegram: файл там сохранить нечем, поэтому
+    // она приходит на замену — тем же разбором и той же заменой данных, что и импорт файла.
+    const db = dbWithClient()
+    db.importData(new Database(new MemoryStore()).exportData())
+
+    const parsed = parsePreImportCopy(db)
+    expect(parsed).not.toBeNull()
+    // Снимок базы лежит в корне — это «файл старого образца», и данные в нём целы.
+    expect(parsed?.legacy).toBe(true)
+    expect(summarizeBackup(parsed!).counts.clients).toBe(1)
+
+    const target = new Database(new MemoryStore())
+    applyBackup(target, parsed!)
+    expect(target.getClients()).toHaveLength(1)
+  })
+
+  it('если копии перед импортом нет, возвращается null', () => {
+    expect(parsePreImportCopy(dbWithClient())).toBeNull()
+  })
+
+  it('имена служебных копий содержат дату и различаются по секундам', () => {
+    const date = new Date('2026-09-26T09:15:30.000Z')
+
+    expect(preImportFileName(date)).toBe('selfcrm-before-import-2026-09-26-09-15-30.json')
+    expect(corruptedFileName(date)).toBe('selfcrm-corrupt-2026-09-26-09-15-30.json')
+    expect(preImportFileName(new Date(date.getTime() + 1000))).not.toBe(preImportFileName(date))
   })
 })

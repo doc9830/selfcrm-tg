@@ -60,6 +60,38 @@ export function downloadBackup(db: Database): Promise<void> {
   return downloadJson(buildBackupJson(db), backupFileName())
 }
 
+// Метка времени для имён служебных копий: 2026-09-26-09-15-30. Секунды здесь не лишние —
+// таких копий бывает несколько подряд (импорт, сброс), и имена не должны совпасть.
+function copyStamp(date: Date): string {
+  return date.toISOString().slice(0, 19).replace(/[:T]/g, '-')
+}
+
+/** Имя файла копии состояния базы, сделанной перед импортом или сбросом. */
+export function preImportFileName(date: Date = new Date()): string {
+  return `selfcrm-before-import-${copyStamp(date)}.json`
+}
+
+/** Имя файла копии нечитаемых данных хранилища. */
+export function corruptedFileName(date: Date = new Date()): string {
+  return `selfcrm-corrupt-${copyStamp(date)}.json`
+}
+
+/**
+ * Копия состояния базы перед последним импортом или сбросом, разобранная так же, как файл
+ * копии. `null` — копии нет (её не делали либо хранилище очищено).
+ *
+ * Нужна там, где файл сохранить нечем: в мини-приложении Telegram клиент игнорирует
+ * blob-ссылки и `<a download>` (см. downloadJson выше). Такая копия возвращается прямо в
+ * приложении — тем же разбором (`parseBackup`) и тем же подтверждением, что и импорт файла.
+ *
+ * Снимок базы, который пишет Database, — это «файл старого образца»: `parseBackup` понимает
+ * его без конверта, потому что коллекции лежат в корне (проверяют тесты).
+ */
+export function parsePreImportCopy(db: Database): ParsedBackup | null {
+  const json = db.readPreImportBackup()
+  return json ? parseBackup(json) : null
+}
+
 // Читает выбранный пользователем файл резервной копии. BOM и пробелы по краям убираются
 // сразу (см. db/backupText.ts): файл мог пройти через чат, почту или редактор.
 export function readBackupFile(file: File): Promise<string> {
