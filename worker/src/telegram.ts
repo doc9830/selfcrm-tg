@@ -26,10 +26,14 @@ export function webAppUrl(env: Env): string {
   return env.WEBAPP_URL || DEFAULT_WEBAPP_URL
 }
 
-// Токен не должен попадать в логи, даже в тексте ошибок Telegram.
-export function scrub(text: unknown, token: string): string {
-  const value = String(text)
-  return token ? value.split(token).join('***') : value
+// Секреты не должны попадать в логи, даже в тексте ошибок Telegram. Сейчас их два —
+// токен бота и секрет webhook, поэтому в скрытые значения можно передать оба.
+export function scrub(text: unknown, ...secrets: (string | undefined)[]): string {
+  let value = String(text)
+  for (const secret of secrets) {
+    if (secret) value = value.split(secret).join('***')
+  }
+  return value
 }
 
 // Вызов метода Bot API: POST с JSON, проверка response.ok и json.ok, понятная ошибка.

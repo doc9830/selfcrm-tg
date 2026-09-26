@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import worker, { WEBHOOK_PATH } from './index'
+import worker from './index'
+import { WEBHOOK_PATH } from './config'
 import type { Env } from './telegram'
 
-// Тесты входа Worker: проверка секрета webhook, разбор JSON и ответ Telegram HTTP 200
-// (Cloud.md §Безопасность webhook, §Тестирование).
+// Тесты входа Worker: проверка секрета webhook, разбор JSON и ответ Telegram.
+//
+// Ответ — это подтверждение доставки, поэтому проверяется именно HTTP-статус: 200 только
+// тогда, когда обновление действительно обработано, 500 — когда обработка упала (Telegram
+// повторит доставку). Тесты работают без сети: `fetch` подменяется заглушкой.
 
 const env: Env = {
   BOT_TOKEN: '123456:TEST-TOKEN',
@@ -12,17 +16,46 @@ const env: Env = {
 }
 
 const startUpdate = {
+  update_id: 1001,
   message: { chat: { id: 42, type: 'private' }, text: '/start' },
 }
 
+const preCheckoutUpdate = {
+  update_id: 1002,
+  pre_checkout_query: {
+    id: 'query-1',
+    invoice_payload: 'selfcrm-support-100',
+    total_amount: 100,
+    from: { id: 42 },
+  },
+}
+
+const paidUpdate = {
+  update_id: 1003,
+  message: {
+    chat: { id: 42, type: 'private' },
+    successful_payment: {
+      invoice_payload: 'selfcrm-support-250',
+      total_amount: 250,
+      telegram_payment_charge_id: 'charge-1',
+    },
+  },
+}
+
 // Заглушка Bot API: пишет вызванные методы, отвечает как Telegram.
-function stubFetch(log: string[], failure?: { description: string }) {
+//   fail         — метод, на котором Bot API отвечает ошибкой (description — её текст);
+//   networkError — метод, на котором падает сам fetch.
+function stubFetch(
+  log: string[],
+  options: { fail?: string; description?: string; networkError?: string } = {},
+) {
   const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
     const method = String(input).split('/').pop() ?? ''
     log.push(init?.body ? `${method} ${init.body}` : method)
-    if (method === 'setChatMenuButton') return new Response(JSON.stringify({ ok: true, result: true }))
-    if (failure) {
-      return new Response(JSON.stringify({ ok: false, description: failure.description, error_code: 400 }), {
+    if (options.networkError === method) throw new Error('сеть недоступна')
+    if (options.fail === method) {
+      const description = options.description ?? `${method}: Bad Request`
+      return new Response(JSON.stringify({ ok: false, description, error_code: 400 }), {
         status: 400,
       })
     }
@@ -37,6 +70,11 @@ function webhookRequest(body: unknown, secret?: string, method = 'POST') {
     headers: secret === undefined ? {} : { 'X-Telegram-Bot-Api-Secret-Token': secret },
     body: method === 'POST' ? JSON.stringify(body) : undefined,
   })
+}
+
+// Всё, что попало в консоль заглушкой spyOn: строки могут быть многострочными.
+function loggedAs(spy: { mock: { calls: unknown[][] } }): string {
+  return spy.mock.calls.flat().join(' ')
 }
 
 afterEach(() => {
@@ -110,6 +148,59 @@ describe('POST /telegram/webhook', () => {
   })
 })
 
+describe('платежи', () => {
+  it('pre_checkout_query подтверждается одним запросом и отвечает 200', async () => {
+    const log: string[] = []
+    stubFetch(log)
+
+    const response = await worker.fetch(webhookRequest(preCheckoutUpdate, 'test-secret'), env)
+
+    expect(response.status).toBe(200)
+    // Один вызов и никаких обращений к GitHub: ответить нужно за 10 секунд.
+    expect(log).toHaveLength(1)
+    expect(log[0]).toContain('answerPreCheckoutQuery')
+    expect(log[0]).toContain('"ok":true')
+  })
+
+  it('ошибка ответа на pre_checkout_query не выдаётся за успех: 500', async () => {
+    const log: string[] = []
+    stubFetch(log, { fail: 'answerPreCheckoutQuery' })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const response = await worker.fetch(webhookRequest(preCheckoutUpdate, 'test-secret'), env)
+
+    expect(response.status).toBe(500)
+    expect(loggedAs(error)).toContain('тип=pre_checkout_query')
+  })
+
+  it('successful_payment обрабатывается как раньше: благодарность и 200', async () => {
+    const log: string[] = []
+    stubFetch(log)
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    const response = await worker.fetch(webhookRequest(paidUpdate, 'test-secret'), env)
+
+    expect(response.status).toBe(200)
+    expect(
+      log.some((entry) => entry.startsWith('sendMessage') && entry.includes('Спасибо')),
+    ).toBe(true)
+    // charge_id по-прежнему попадает в лог: без него не вернуть звёзды.
+    expect(loggedAs(info)).toContain('charge-1')
+  })
+})
+
+describe('неподдерживаемое обновление', () => {
+  it('неизвестный тип: отвечает 200 и ничего не вызывает', async () => {
+    const log: string[] = []
+    stubFetch(log)
+
+    const response = await worker.fetch(webhookRequest({ update_id: 1004 }, 'test-secret'), env)
+
+    expect(response.status).toBe(200)
+    expect(log).toEqual([])
+  })
+})
+
 describe('прочие адреса', () => {
   it('на неизвестный путь отвечает 404', async () => {
     const response = await worker.fetch(
@@ -129,18 +220,62 @@ describe('прочие адреса', () => {
   })
 })
 
-describe('ошибка Telegram API', () => {
-  it('не срывает ответ Telegram и не раскрывает токен в логе', async () => {
+describe('ошибка обработки обновления', () => {
+  it('ошибка Bot API: отвечает 500, а не подтверждает доставку', async () => {
     const log: string[] = []
-    stubFetch(log, { description: 'Bad Request: chat not found (токен 123456:TEST-TOKEN)' })
+    stubFetch(log, { fail: 'sendMessage' })
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const response = await worker.fetch(webhookRequest(startUpdate, 'test-secret'), env)
 
-    expect(response.status).toBe(200)
-    const logged = error.mock.calls.flat().join(' ')
+    expect(response.status).toBe(500)
+    const logged = loggedAs(error)
+    expect(logged).toContain('Обновление не обработано')
+    expect(logged).toContain('update_id=1001')
+    expect(logged).toContain('тип=message')
     expect(logged).toContain('sendMessage')
+  })
+
+  it('сетевая ошибка fetch: отвечает 500', async () => {
+    const log: string[] = []
+    stubFetch(log, { networkError: 'sendMessage' })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const response = await worker.fetch(webhookRequest(startUpdate, 'test-secret'), env)
+
+    expect(response.status).toBe(500)
+    expect(loggedAs(error)).toContain('сеть недоступна')
+  })
+
+  it('в лог не попадают токен, секрет webhook и тело обновления', async () => {
+    const log: string[] = []
+    stubFetch(log, {
+      fail: 'sendMessage',
+      description: 'Bad Request: токен 123456:TEST-TOKEN и секрет test-secret',
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const response = await worker.fetch(webhookRequest(startUpdate, 'test-secret'), env)
+
+    expect(response.status).toBe(500)
+    const logged = loggedAs(error)
     expect(logged).toContain('***')
     expect(logged).not.toContain('123456:TEST-TOKEN')
+    expect(logged).not.toContain('test-secret')
+    // Тело обновления не пишется: в нём бывают тексты пользователя и платёжные данные.
+    expect(logged).not.toContain('/start')
+  })
+
+  it('ошибка кнопки меню не срывает ответ: обновление обработано → 200', async () => {
+    const log: string[] = []
+    stubFetch(log, { fail: 'setChatMenuButton' })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const response = await worker.fetch(webhookRequest(startUpdate, 'test-secret'), env)
+
+    // Кнопка меню — идемпотентная настройка: её ошибка попадает в лог, но ответ /start уходит.
+    expect(response.status).toBe(200)
+    expect(log.some((entry) => entry.startsWith('sendMessage'))).toBe(true)
+    expect(loggedAs(error)).toContain('setChatMenuButton')
   })
 })

@@ -65,7 +65,7 @@
 | `src/components/SupportBanner.tsx` | Плашка на главном экране: суммы, оплата через `openInvoice`, «×» и благодарность |
 | `scripts/telegram-bot.mjs`         | Утилиты бота: `--setup` (команды `/start`, `/help`, `/whatsnew`, `/support`, `/paysupport`, общая кнопка меню, `--chat <id>` — для чата), `--whatsnew` — предпросмотр текста, `--star-links` — создание ссылок на счета. Long polling удалён: обновления принимает Worker |
 | `scripts/set-webhook.mjs`          | Webhook бота: `--set` (удаляет прежний webhook и ставит новый на адрес Worker), `--info` (`getWebhookInfo`), `--delete`, `--sync-secrets` (залив `BOT_TOKEN` и `WEBHOOK_SECRET` в Cloudflare) |
-| `worker/src/index.ts`              | Вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (при несовпадении — 403), ответ Telegram — HTTP 200; `GET /` — проверка развёртывания |
+| `worker/src/index.ts`              | Вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (при несовпадении — 403), ответ Telegram — HTTP 200, если обновление обработано, и 500, если обработка упала (Telegram повторит доставку); `GET /` — проверка развёртывания |
 | `worker/src/handler.ts`            | Обработка обновлений: команды, документы, платежи; `pre_checkout_query` подтверждается первым делом и без лишних запросов. Ставит кнопку меню в личном чате |
 | `worker/src/messages.ts`           | Тексты и кнопки бота — перенесены из `scripts/telegram-bot.mjs` без изменений |
 | `worker/src/telegram.ts`           | Вызовы Bot API (`telegram()`), `webAppUrl()`, `scrub()` — токен не попадает в логи и в тексты ошибок |
@@ -360,9 +360,20 @@ Telegram → POST https://selfcrm-bot.<поддомен>.workers.dev/telegram/we
 - **Точка входа.** `worker/src/index.ts`: проверяет путь `POST /telegram/webhook` и заголовок
   `X-Telegram-Bot-Api-Secret-Token` (должен совпадать с секретом `WEBHOOK_SECRET`), иначе
   `403 Forbidden` — запрос не обрабатывается. Затем разбирает JSON (ошибка → `400`) и отдаёт
-  обновление в `handleUpdate`. Ответ Telegram — HTTP 200: ошибка обработки пишется в лог
-  (`console.error`), но не превращается в повторную доставку, иначе пользователь получил бы
-  дубли сообщений.
+  обновление в `handleUpdate`.
+- **Ответ — это подтверждение доставки.** HTTP 200 Worker отдаёт, только если обновление
+  действительно обработано: для Telegram это «доставлено», и он помечает update выполненным.
+  Если обработка упала, в лог уходит `Обновление не обработано` с `update_id`, типом
+  (`message` / `pre_checkout_query` / `unknown`) и текстом ошибки (оба секрета вырезаны
+  через `scrub()`, тело update не пишется), а Telegram получает `500` и повторяет доставку.
+  Так сбой не теряется: с `200` в любом случае ошибка не попадала ни в лог, ни в
+  `getWebhookInfo`.
+- **Повтор безопасен.** Идемпотентной защиты в Worker нет, и она не нужна: состояние нигде не
+  хранится, ничего не начисляется и не выдаётся — звёзды списывает и зачисляет Telegram, а бот
+  только отвечает сообщением. `setChatMenuButton` идемпотентен, `answerPreCheckoutQuery`
+  Telegram как раз и повторяет (10 секунд на ответ), `createInvoiceLink` создаёт новую ссылку на
+  тот же счёт, `sendMessage` повторяет то же информационное сообщение. Хранилище (KV) ради
+  дедупликации не нужно: «дубль» здесь — лишнее сообщение, а не дубль платежа.
 - **Секреты.** `BOT_TOKEN` и `WEBHOOK_SECRET` — секреты Worker (`npx wrangler secret put ...`),
   в репозиторий и в лог они не попадают: любое сообщение об ошибке проходит через `scrub()`.
   `WEBAPP_URL` — обычная переменная из `wrangler.toml`.
@@ -376,9 +387,12 @@ Telegram → POST https://selfcrm-bot.<поддомен>.workers.dev/telegram/we
   и последнюю ошибку доставки с её временем; `GET /` у адреса Worker отвечает текстом
   `SelfCRM bot webhook works` — значит Worker развёрнут. Если бот молчит на `/start`:
   проверить адрес и ошибки `getWebhookInfo`, затем логи Worker (`npx wrangler tail` или
-  Cloudflare → Workers & Pages → selfcrm-bot → Logs). Ошибка `403` в логах Telegram означает
-  несовпадение `WEBHOOK_SECRET` у Worker и в webhook. Запись `500 Internal Server Error` при
-  **пустой** очереди — безобидный след гонки: `wrangler secret put` применяется несколько
-  секунд, и Telegram успел постучаться в версию ещё без секрета; Telegram повторяет доставку
-  сам, а счётчик очереди после успеха обнуляется.
+  Cloudflare → Workers & Pages → selfcrm-bot → Logs). В логе первым делом ищется
+  `Обновление не обработано` — там `update_id`, тип обновления и текст ошибки, по которым
+  видно, что именно упало. Ошибка `403` в логах Telegram означает несовпадение
+  `WEBHOOK_SECRET` у Worker и в webhook; `500` означает, что обработка обновления упала
+  (Telegram повторит доставку) или что у Worker вообще нет `WEBHOOK_SECRET`. Запись
+  `500 Internal Server Error` при **пустой** очереди — безобидный след гонки: `wrangler
+  secret put` применяется несколько секунд, и Telegram успел постучаться в версию ещё без
+  секрета; Telegram повторяет доставку сам, а счётчик очереди после успеха обнуляется.
 

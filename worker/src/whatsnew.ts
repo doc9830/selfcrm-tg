@@ -1,9 +1,9 @@
 // «Что нового»: changelog последнего релиза Android-версии.
 //
 // Источник — публичный GitHub API, токен не нужен. Кэша нет: Worker не хранит состояние
-// между запросами (Cloud.md §Удалить long polling), а /whatsnew вызывают руками редко.
-// Если GitHub недоступен или сработал лимит запросов, бот присылает ссылку на релизы —
-// то же поведение, что было у локального лаунчера.
+// между запросами (long polling удалён, обновления принимает webhook), а /whatsnew вызывают
+// руками редко. Если GitHub недоступен или сработал лимит запросов, бот присылает ссылку на
+// релизы — то же поведение, что было у локального лаунчера.
 import { GITHUB_USER_AGENT, MENU_BUTTON_TEXT, RELEASES_API, RELEASES_URL } from './config'
 import type { Deps } from './telegram'
 import type { Keyboard } from './messages'

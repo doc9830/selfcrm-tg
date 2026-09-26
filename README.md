@@ -298,7 +298,7 @@ npm run bot:setup -- --chat 123456789   # дополнительно кнопк�
 
 | Файл | Что это |
 | --- | --- |
-| `worker/src/index.ts` | вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (иначе 403), ответ Telegram — HTTP 200 |
+| `worker/src/index.ts` | вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (иначе 403), ответ Telegram — HTTP 200, если обновление обработано, и 500, если обработка упала |
 | `worker/src/handler.ts` | обработка обновлений: команды, документы, платежи |
 | `worker/src/messages.ts` | тексты и кнопки бота (перенесены из `scripts/telegram-bot.mjs` без изменений) |
 | `worker/src/telegram.ts` | вызовы Bot API; токен не попадает ни в ответ, ни в лог (`scrub`) |
@@ -349,7 +349,17 @@ npm run bot:webhook:set -- --url https://selfcrm-bot.<поддомен>.workers.
 1. адрес Worker отвечает `SelfCRM bot webhook works` (значит, Worker развёрнут);
 2. `npm run bot:webhook:info` — адрес совпадает с вашим, `Обновлений в очереди: 0`;
 3. логи Worker: `npx wrangler tail` или Cloudflare → Workers & Pages → selfcrm-bot → **Logs**
-   (там видно `Не удалось обработать обновление: ...`, если Telegram API недоступен).
+   (там видно `Обновление не обработано`, `update_id`, тип обновления и текст ошибки —
+   например, если недоступен Telegram API).
+
+Если обработка обновления упала, Worker отвечает Telegram `500` — это не «бот сломался
+навсегда», а честный сигнал «обновление не обработано»: Telegram повторит доставку сам.
+Так ошибка не теряется — раньше Worker отвечал `200` в любом случае, и сбой выглядел как
+успешно доставленное обновление (ни в логе, ни в `getWebhookInfo` не было следа).
+Повтор безопасен: Worker не хранит состояние и ничего не начисляет за платёж — звёзды
+списывает Telegram, поэтому повторный проход может лишь повторить информационное сообщение
+(`setChatMenuButton` вообще идемпотентен, `answerPreCheckoutQuery` Telegram как раз и
+повторяет).
 
 Запись `Последняя ошибка доставки: Wrong response from the webhook: 500 Internal Server Error`
 при пустой очереди — безобидный след гонки: `wrangler secret put` применяется несколько

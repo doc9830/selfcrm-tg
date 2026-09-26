@@ -41,6 +41,9 @@ export interface TelegramMessage {
 }
 
 export interface TelegramUpdate {
+  // Номер обновления: нужен только для диагностики — по нему в логе видно, какое именно
+  // обновление не удалось обработать.
+  update_id?: number
   message?: TelegramMessage
   pre_checkout_query?: {
     id: string

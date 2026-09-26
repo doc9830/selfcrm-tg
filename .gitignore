@@ -2,6 +2,8 @@ node_modules
 dist
 dist-ssr
 *.local
+# Кеш Cloudflare: `wrangler dev` и `wrangler deploy` складывают сюда состояние сборки.
+.wrangler
 .env
 .env.*
 !.env.example

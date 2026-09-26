@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { handleUpdate } from './handler'
 import type { Env } from './telegram'
 
-// Тесты проверяют поведение бота целиком (Cloud.md §Тестирование): обновление Telegram на
+// Тесты проверяют поведение бота целиком: обновление Telegram на
 // входе — вызовы Bot API на выходе. Сети нет: fetch подменяется заглушкой, которая пишет
 // вызовы в массив, а на методы Telegram отвечает как настоящий api.telegram.org.
 

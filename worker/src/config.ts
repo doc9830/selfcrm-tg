@@ -33,3 +33,10 @@ export const SUPPORT_PAYLOAD = 'selfcrm-support'
 
 // Адрес для вопросов по оплате (команда /paysupport).
 export const SUPPORT_EMAIL = 'doc9830@proton.me'
+
+// Путь webhook: Telegram присылает обновления сюда, тот же путь ставит
+// `scripts/set-webhook.mjs`. Константа живёт отдельно от входа Worker не случайно: файл
+// `worker/src/index.ts` — это точка входа, и по правилам Cloudflare из него экспортируется
+// только обработчик (`export default`). Любой лишний именованный экспорт из entry-файла
+// ломает запуск: `wrangler dev` падает с «Incorrect type for map entry ...».
+export const WEBHOOK_PATH = '/telegram/webhook'

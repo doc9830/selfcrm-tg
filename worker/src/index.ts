@@ -9,12 +9,25 @@
 // Роуты:
 //   POST /telegram/webhook — обновления Telegram (проверка X-Telegram-Bot-Api-Secret-Token);
 //   GET  /                 — проверка, что Worker развёрнут (текст, без секретов).
+//
+// Ответ Worker — это подтверждение доставки для Telegram: HTTP 200 означает «обновление
+// обработано», и Telegram помечает его доставленным; 5xx означает «не обработано, пришлите
+// ещё раз» — Telegram повторит доставку. Поэтому ошибку обработки нельзя глушить: раньше
+// Worker отвечал 200 в любом случае, и настоящая ошибка терялась бы вместе с обновлением
+// (пользователь не получил ответа, а в `getWebhookInfo` не было бы даже следа).
+//
+// Повтор обновления безопасен, и вот почему: Worker не хранит состояние, ничего не пишет в
+// базу и ничего не выдаёт за платёж — звёзды списывает и зачисляет сам Telegram, а бот лишь
+// отвечает сообщением. Все действия бота идемпотентны для Telegram (`setChatMenuButton`) или
+// безвредны при повторе (`sendMessage` — то же информационное сообщение, `createInvoiceLink`
+// — новая ссылка на тот же счёт, `answerPreCheckoutQuery` — ответ, который Telegram как раз
+// повторяет). Дороже всего повтор информационного сообщения, дешевле — потерянная ошибка,
+// поэтому 5xx здесь правильнее.
 
+import { WEBHOOK_PATH } from './config'
 import { handleUpdate, type TelegramUpdate } from './handler'
 import type { Deps, Env } from './telegram'
 import { scrub } from './telegram'
-
-export const WEBHOOK_PATH = '/telegram/webhook'
 
 // Секрет сверяется с заголовком, который Telegram присылает при установленном secret_token.
 const SECRET_HEADER = 'X-Telegram-Bot-Api-Secret-Token'
@@ -60,13 +73,36 @@ export default {
     try {
       await handleUpdate(update, env, deps)
     } catch (e) {
-      // Ошибку Telegram API записываем в лог, но отвечаем 200: повтор обновления привёл бы
-      // к дублям сообщений, а причину (например, недоступность api.telegram.org) видно в логе.
-      console.error(`Не удалось обработать обновление: ${scrub(errorText(e), env.BOT_TOKEN)}`)
+      // Обработка упала — 200 здесь был бы ложным подтверждением доставки. Отвечаем 500:
+      // Telegram повторит обновление (повтор безопасен, см. шапку файла), а причина
+      // останется в логе Worker и в `Последняя ошибка доставки` у getWebhookInfo.
+      console.error(updateFailureLog(update, e, env))
+      return new Response('Processing failed\n', { status: 500 })
     }
 
     return new Response('ok\n')
   },
+}
+
+// Лог упавшего обновления: короткий и структурный, чтобы его было видно в `wrangler tail`.
+//
+// Тело обновления целиком не пишется — там тексты пользователя и платёжные данные, а для
+// диагностики достаточно номера и типа. Из текста ошибки вырезаются оба секрета: и токен
+// бота, и секрет webhook (Telegram присылает его в заголовке, но он мог бы попасть в
+// сообщение об ошибке).
+function updateFailureLog(update: TelegramUpdate, e: unknown, env: Env): string {
+  return [
+    'Обновление не обработано',
+    `update_id=${update?.update_id ?? '—'}`,
+    `тип=${updateType(update)}`,
+    `ошибка=${scrub(errorText(e), env.BOT_TOKEN, env.WEBHOOK_SECRET)}`,
+  ].join('\n')
+}
+
+function updateType(update: TelegramUpdate | null | undefined): string {
+  if (update?.pre_checkout_query) return 'pre_checkout_query'
+  if (update?.message) return 'message'
+  return 'unknown'
 }
 
 function errorText(e: unknown): string {
