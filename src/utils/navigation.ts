@@ -1,12 +1,13 @@
 // Построение маршрута до адреса клиента.
-// На Android (Capacitor) открывается системный выбор навигатора через geo:-intent.
-// В Telegram Mini App и в браузере — маршрут в Яндекс.Картах (в Mini App ссылку
-// открывает клиент Telegram, потому что window.open в WebView игнорируется).
-//
-// Точка назначения задаётся полным текстовым адресом: навигатор ищет дом по своей базе
-// и ведёт к нужному дому, а не к «центру населённого пункта», куда уводили приблизительные
-// координаты. Координаты — запасной способ, когда адреса у клиента нет.
+// На Android (Capacitor) открывается системный выбор навигатора через geo:-intent —
+// там навигатор сам находит дом по тексту адреса.
+// В Telegram Mini App и в браузере — маршрут в Яндекс.Картах (в Mini App ссылку открывает
+// клиент Telegram, потому что window.open в WebView игнорируется), а ссылка на маршрут
+// задаёт точку координатами: текст в ней разбирают только веб-карты, приложение по такой
+// ссылке открывается без пункта. Координаты перед открытием уточняются по полному адресу
+// (см. resolveRoutePoint), чтобы не уехать в центр населённого пункта.
 
+import { geocodeAddress } from '../api/dadata'
 import { openExternalLink } from '../telegram/webapp'
 
 export interface RoutePoint {
@@ -61,13 +62,58 @@ export function buildRouteUri(dest: RoutePoint): string {
 }
 
 // https-ссылка на маршрут в Яндекс.Картах: `~` означает «откуда» = текущее местоположение
-// пользователя, дальше идёт точка назначения. Адрес передаём текстом — Яндекс находит дом сам
-// (в том числе в Mini App и во встроенном браузере Telegram, где нет доступа к геокодеру
-// приложения); координаты — только когда адреса у клиента нет.
+// пользователя, дальше идёт точка назначения. Точку задаём координатами: приложение Яндекс.Карт
+// и Навигатор разбирают в такой ссылке только координаты — с текстом адреса они открываются
+// без пункта назначения. Текст остаётся запасным вариантом, когда координат у клиента нет:
+// такую ссылку понимают веб-карты, они находят дом сами.
 export function buildWebRouteUri(dest: RoutePoint): string {
-  const address = (dest.address ?? '').trim()
-  const target = address ? encodeURIComponent(address) : `${dest.lat},${dest.lng}`
+  const target = hasRouteCoords(dest)
+    ? `${dest.lat},${dest.lng}`
+    : encodeURIComponent((dest.address ?? '').trim())
   return `https://yandex.ru/maps/?rtext=~${target}&rtt=auto`
+}
+
+// Ждать геокодер долго нельзя: навигатор должен открываться сразу после нажатия.
+const GEOCODE_TIMEOUT_MS = 2500
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      () => {
+        // Сервис недоступен (нет сети, нет ключа) — маршрут строим по сохранённым координатам.
+        clearTimeout(timer)
+        resolve(null)
+      },
+    )
+  })
+}
+
+// Уточняет точку маршрута перед открытием: полный адрес спрашиваем у Дадаты, и координаты дома
+// заменяют сохранённые. Нужно потому, что подсказки для деревень, СНТ и новых домов часто
+// указывают на центр населённого пункта, а дом сервис знает. Если дом не найден (qc_geo выше 1)
+// или сервис недоступен, остаются координаты клиента; если координат нет вовсе — берём точку
+// от Дадаты любой точности, потому что ссылку с текстом приложение-навигатор не понимает.
+export async function resolveRoutePoint(dest: RoutePoint): Promise<RoutePoint> {
+  const address = (dest.address ?? '').trim()
+  if (!address) return dest
+
+  const point = await withTimeout(geocodeAddress(address), GEOCODE_TIMEOUT_MS)
+  if (!point) return dest
+  if (!hasRouteCoords(dest) || point.houseLevel) {
+    return { ...dest, lat: point.lat, lng: point.lng }
+  }
+  return dest
+}
+
+// Открывает маршрут, уточнив точку по адресу (см. resolveRoutePoint). Именно эту функцию
+// вызывает кнопка «Маршрут» в карточке клиента.
+export async function openRouteResolved(dest: RoutePoint): Promise<void> {
+  openRoute(await resolveRoutePoint(dest))
 }
 
 export function openRoute(dest: RoutePoint): void {

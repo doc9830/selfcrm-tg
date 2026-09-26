@@ -59,7 +59,7 @@ workflow не упадёт: ветка синхронизации всё рав�
 | `src/index.css` | safe area Telegram (`--tg-safe-area-inset-*`), высота окна |
 | `src/screens/Settings.tsx` | раздел Telegram, облачная копия, предпросмотр перед импортом |
 | `src/screens/OrderDetail.tsx` | чек и «Поделиться» вместо сохранения файла |
-| `src/utils/navigation.ts`, `src/utils/navigation.test.ts` | распознавание адреса клиента внутри Telegram и `openExternalLink` для ссылок Яндекс.Карт; логика маршрута (приоритет текстового адреса) совпадает с upstream |
+| `src/utils/navigation.ts`, `src/utils/navigation.test.ts` | распознавание адреса клиента внутри Telegram и `openExternalLink` для ссылок Яндекс.Карт; `resolveRoutePoint()` уточняет координаты маршрута через Дадату (`src/api/dadata.ts`); `geo:`-ссылка по тексту адреса совпадает с upstream |
 | `src/pdf/documents.ts` (+ `src/pdf/documents.test.ts`) | отдача документа браузеру вместо файловой системы |
 | `src/db/addresses.ts`, `src/db/addresses.test.ts` | `readUserAddresses()` — отличает свою базу адресов от демо-набора |
 | `src/db/backup.ts` | сохранение файла копии: веб-загрузка и `Share` вместо `Filesystem` |

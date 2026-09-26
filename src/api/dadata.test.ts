@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { toAddressEntries, type DadataSuggestion } from './dadata'
+import { toAddressEntries, toAddressPoint, type DadataSuggestion } from './dadata'
 
 describe('toAddressEntries', () => {
   it('преобразует подсказку в запись с координатами и кадастровым номером', () => {
@@ -43,6 +43,34 @@ describe('toAddressEntries', () => {
   it('пустой/неопределённый список даёт пустой результат', () => {
     expect(toAddressEntries([])).toEqual([])
     expect(toAddressEntries(undefined as unknown as DadataSuggestion[])).toEqual([])
+  })
+})
+
+describe('toAddressPoint', () => {
+  it('берёт координаты дома с точностью «дом» (qc_geo 0 и 1)', () => {
+    expect(toAddressPoint({ value: 'а', data: { geo_lat: '55.6', geo_lon: '36.9', qc_geo: 0 } })).toEqual({
+      lat: 55.6,
+      lng: 36.9,
+      houseLevel: true,
+    })
+    expect(
+      toAddressPoint({ value: 'а', data: { geo_lat: '55.6', geo_lon: '36.9', qc_geo: 1 } })?.houseLevel,
+    ).toBe(true)
+  })
+
+  it('координаты населённого пункта помечает как неточные', () => {
+    expect(
+      toAddressPoint({ value: 'а', data: { geo_lat: '55.6', geo_lon: '36.9', qc_geo: 3 } }),
+    ).toEqual({ lat: 55.6, lng: 36.9, houseLevel: false })
+  })
+
+  it('без точности и без координат точки нет', () => {
+    expect(
+      toAddressPoint({ value: 'а', data: { geo_lat: '55.6', geo_lon: '36.9' } })?.houseLevel,
+    ).toBe(false)
+    expect(toAddressPoint({ value: 'а', data: { geo_lat: '0', geo_lon: '0' } })).toBeNull()
+    expect(toAddressPoint({ value: 'а', data: null })).toBeNull()
+    expect(toAddressPoint(undefined)).toBeNull()
   })
 })
 

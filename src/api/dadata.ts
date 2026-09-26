@@ -69,10 +69,10 @@ export function toAddressEntries(suggestions: DadataSuggestion[]): AddressEntry[
 // Поиск подсказок по адресу. Ограничиваем выборку уровнем дома (from_bound/to_bound),
 // чтобы каждая подсказка была полным адресом с координатами и (по возможности)
 // кадастровым номером.
-export async function suggestAddresses(query: string, count = 8): Promise<AddressEntry[]> {
-  const q = query.trim()
-  if (!q) return []
-
+//
+// Запрос общий и для автодополнения адреса, и для уточнения координат при построении маршрута
+// (geocodeAddress): у Дадаты один и тот же метод отдаёт и подсказки, и координаты дома.
+async function requestSuggestions(query: string, count: number): Promise<DadataSuggestion[]> {
   // Сборка без ключа: не обращаемся к сервису, вызывающий код переключается на локальную базу.
   if (!hasDadataToken()) {
     throw new Error('Dadata token is not configured (VITE_DADATA_TOKEN)')
@@ -86,7 +86,7 @@ export async function suggestAddresses(query: string, count = 8): Promise<Addres
       Authorization: `Token ${API_KEY}`,
     },
     body: JSON.stringify({
-      query: q,
+      query,
       count,
       from_bound: { value: 'house' },
       to_bound: { value: 'house' },
@@ -98,5 +98,38 @@ export async function suggestAddresses(query: string, count = 8): Promise<Addres
   }
 
   const json = (await response.json()) as DadataSuggestResponse
-  return toAddressEntries(json.suggestions ?? [])
+  return json.suggestions ?? []
+}
+
+export async function suggestAddresses(query: string, count = 8): Promise<AddressEntry[]> {
+  const q = query.trim()
+  if (!q) return []
+  return toAddressEntries(await requestSuggestions(q, count))
+}
+
+// Координаты точки по полному тексту адреса.
+export interface AddressPoint {
+  lat: number
+  lng: number
+  // Координаты дома: qc_geo 0 — точные, 1 — ближайший дом. Остальные коды означают, что
+  // Дадата знает только улицу, населённый пункт или город — такая точка грубее сохранённых
+  // координат клиента, поэтому при построении маршрута она их не заменяет.
+  houseLevel: boolean
+}
+
+export function toAddressPoint(suggestion: DadataSuggestion | undefined): AddressPoint | null {
+  const lat = toNumber(suggestion?.data?.geo_lat)
+  const lng = toNumber(suggestion?.data?.geo_lon)
+  if (lat === 0 && lng === 0) return null
+  const qc = suggestion?.data?.qc_geo
+  return { lat, lng, houseLevel: qc === 0 || qc === 1 }
+}
+
+// Уточнение точки по адресу: нужна кнопке «Маршрут», потому что навигатор разбирает ссылку
+// только по координатам. Бросает ошибку, если сервис недоступен или ключа нет, —
+// вызывающий код остаётся на сохранённых координатах клиента (utils/navigation.ts).
+export async function geocodeAddress(query: string): Promise<AddressPoint | null> {
+  const q = query.trim()
+  if (!q) return null
+  return toAddressPoint((await requestSuggestions(q, 1))[0])
 }

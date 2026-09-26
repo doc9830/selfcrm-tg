@@ -7,6 +7,11 @@ vi.mock('@capacitor/core', () => ({
   Capacitor: { isNativePlatform: () => capacitor.native },
 }))
 
+// Дадата подменяется: перед открытием маршрута точка уточняется по полному адресу
+// (координаты дома вместо центра населённого пункта) — см. resolveRoutePoint.
+const dadata = vi.hoisted(() => ({ geocodeAddress: vi.fn() }))
+vi.mock('../api/dadata', () => ({ geocodeAddress: dadata.geocodeAddress }))
+
 import type { TelegramWebApp } from '../telegram/webapp'
 import {
   buildRouteUri,
@@ -18,13 +23,16 @@ import {
   buildWhatsAppUri,
   hasRouteCoords,
   openRoute,
+  openRouteResolved,
   openTelegram,
   openWhatsApp,
   phoneDigits,
+  resolveRoutePoint,
 } from './navigation'
 
 afterEach(() => {
   capacitor.native = false
+  dadata.geocodeAddress.mockReset()
   vi.unstubAllGlobals()
 })
 
@@ -92,24 +100,99 @@ describe('buildRouteUri', () => {
 })
 
 describe('buildWebRouteUri', () => {
-  it('передаёт текстовый адрес, чтобы Яндекс нашёл дом сам', () => {
-    const address = 'г. Москва, ул. Арбат, д. 12'
-    expect(buildWebRouteUri({ lat: 55.76, lng: 37.61, address })).toBe(
-      `https://yandex.ru/maps/?rtext=~${encodeURIComponent(address)}&rtt=auto`,
+  it('задаёт точку координатами — их понимает и приложение-навигатор', () => {
+    expect(buildWebRouteUri({ lat: 55.76, lng: 37.61, address: 'г. Москва, ул. Арбат, д. 12' })).toBe(
+      'https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto',
     )
   })
 
-  it('без координат тоже строит маршрут по адресу', () => {
+  it('без координат передаёт текстовый адрес для веб-карт', () => {
     const address = 'г. Казань, ул. Баумана, д. 20'
     expect(buildWebRouteUri({ lat: 0, lng: 0, address })).toBe(
       `https://yandex.ru/maps/?rtext=~${encodeURIComponent(address)}&rtt=auto`,
     )
   })
 
-  it('без адреса строит маршрут по координатам', () => {
-    expect(buildWebRouteUri({ lat: 55.76, lng: 37.61 })).toBe(
-      'https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto',
-    )
+  it('точку 0/0 без адреса считает отсутствующей', () => {
+    expect(buildWebRouteUri({ lat: 0, lng: 0 })).toBe('https://yandex.ru/maps/?rtext=~&rtt=auto')
+  })
+})
+
+describe('resolveRoutePoint', () => {
+  const address = 'Московская обл, Одинцовский г.о., д. Ракитня, ул. Дачная, д. 7'
+
+  it('заменяет приблизительные координаты координатами дома из Дадаты', async () => {
+    dadata.geocodeAddress.mockResolvedValue({ lat: 55.6011, lng: 36.9009, houseLevel: true })
+
+    await expect(resolveRoutePoint({ lat: 55.6, lng: 36.9, address })).resolves.toEqual({
+      lat: 55.6011,
+      lng: 36.9009,
+      address,
+    })
+    expect(dadata.geocodeAddress).toHaveBeenCalledWith(address)
+  })
+
+  it('оставляет координаты клиента, если Дадата знает только населённый пункт', async () => {
+    dadata.geocodeAddress.mockResolvedValue({ lat: 55.6, lng: 36.9, houseLevel: false })
+
+    await expect(resolveRoutePoint({ lat: 55.55, lng: 36.95, address })).resolves.toEqual({
+      lat: 55.55,
+      lng: 36.95,
+      address,
+    })
+  })
+
+  it('подставляет точку Дадаты, когда координат у клиента нет', async () => {
+    dadata.geocodeAddress.mockResolvedValue({ lat: 55.6, lng: 36.9, houseLevel: false })
+
+    await expect(resolveRoutePoint({ lat: 0, lng: 0, address })).resolves.toEqual({
+      lat: 55.6,
+      lng: 36.9,
+      address,
+    })
+  })
+
+  it('не мешает маршруту, если сервис недоступен', async () => {
+    dadata.geocodeAddress.mockRejectedValue(new Error('Dadata suggest failed: 500'))
+
+    await expect(resolveRoutePoint({ lat: 55.55, lng: 36.95, address })).resolves.toEqual({
+      lat: 55.55,
+      lng: 36.95,
+      address,
+    })
+  })
+
+  it('без адреса не обращается к сервису', async () => {
+    await expect(resolveRoutePoint({ lat: 55.76, lng: 37.61 })).resolves.toEqual({
+      lat: 55.76,
+      lng: 37.61,
+    })
+    expect(dadata.geocodeAddress).not.toHaveBeenCalled()
+  })
+})
+
+describe('openRouteResolved', () => {
+  it('открывает маршрут к дому, найденному по адресу', async () => {
+    dadata.geocodeAddress.mockResolvedValue({ lat: 55.6011, lng: 36.9009, houseLevel: true })
+    const openLink = vi.fn()
+    stubWindow({ webApp: { initData: 'query_id=1', platform: 'android', openLink } })
+
+    await openRouteResolved({
+      lat: 55.6,
+      lng: 36.9,
+      address: 'Московская обл, Одинцовский г.о., д. Ракитня, ул. Дачная, д. 7',
+    })
+
+    expect(openLink).toHaveBeenCalledWith('https://yandex.ru/maps/?rtext=~55.6011,36.9009&rtt=auto')
+  })
+
+  it('без адреса открывает маршрут по координатам клиента', async () => {
+    const openLink = vi.fn()
+    stubWindow({ webApp: { initData: 'query_id=1', platform: 'android', openLink } })
+
+    await openRouteResolved({ lat: 55.76, lng: 37.61 })
+
+    expect(openLink).toHaveBeenCalledWith('https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto')
   })
 })
 
@@ -143,29 +226,29 @@ describe('openRoute', () => {
     expect(calls).toEqual([{ url: 'geo:0,0?q=55.76,37.61(Home)', target: '_system' }])
   })
 
-  it('в Telegram Mini App открывает маршрут по адресу средствами клиента', () => {
+  it('в Telegram Mini App открывает маршрут по координатам клиента', () => {
     const openLink = vi.fn()
     const calls = stubWindow({ webApp: { initData: 'query_id=1', platform: 'android', openLink } })
-    const address = 'г. Москва, ул. Тверская, д. 1'
 
-    openRoute({ lat: 55.76, lng: 37.61, address })
+    openRoute({ lat: 55.76, lng: 37.61, address: 'г. Москва, ул. Тверская, д. 1' })
 
-    // Координаты из подсказок могли оказаться приблизительными, поэтому в Яндекс.Карты
-    // уходит текст адреса — карта находит дом сама.
-    expect(openLink).toHaveBeenCalledWith(
-      `https://yandex.ru/maps/?rtext=~${encodeURIComponent(address)}&rtt=auto`,
-    )
+    // Приложение-навигатор разбирает в ссылке только координаты: с текстом адреса оно
+    // открывается без пункта назначения. Точку уточняет resolveRoutePoint.
+    expect(openLink).toHaveBeenCalledWith('https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto')
     // window.open в WebView мини-приложения игнорируется — использовать его нельзя.
     expect(calls).toEqual([])
   })
 
-  it('в Telegram Mini App без адреса строит маршрут по координатам', () => {
+  it('в Telegram Mini App без координат отдаёт ссылку с текстом адреса', () => {
     const openLink = vi.fn()
     stubWindow({ webApp: { initData: 'query_id=1', platform: 'android', openLink } })
+    const address = 'г. Казань, ул. Баумана, д. 20'
 
-    openRoute({ lat: 55.76, lng: 37.61 })
+    openRoute({ lat: 0, lng: 0, address })
 
-    expect(openLink).toHaveBeenCalledWith('https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto')
+    expect(openLink).toHaveBeenCalledWith(
+      `https://yandex.ru/maps/?rtext=~${encodeURIComponent(address)}&rtt=auto`,
+    )
   })
 
   it('в браузере открывает маршрут в новой вкладке', () => {
