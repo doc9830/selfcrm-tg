@@ -1,9 +1,10 @@
 # Синхронизация фич из doc9830/SelfCRM
 
 Этот репозиторий (`doc9830/selfcrm-tg`) — копия Android-проекта `doc9830/SelfCRM`,
-адаптированная под Telegram Mini App ([PROMPT.md](../PROMPT.md)). Новые функции появляются
-в Android-репозитории, и их нужно переносить сюда. Документ фиксирует, насколько копии разошлись
-(замер 25.09.2026), правило минимальной дивергенции и три способа переносить изменения дальше.
+адаптированная под Telegram Mini App по отдельному техзаданию (в репозиторий оно не входит
+и хранится локально). Новые функции появляются в Android-репозитории, и их нужно переносить
+сюда. Документ фиксирует, насколько копии разошлись (замер 26.09.2026: обе версии — 1.5.2),
+правило минимальной дивергенции и три способа переносить изменения дальше.
 
 ## Статус
 
@@ -42,12 +43,17 @@ workflow не упадёт: ветка синхронизации всё рав�
 
 | | |
 | --- | --- |
-| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.5.2` | 
+| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.6.0` | 
 | Mini App | `doc9830/selfcrm-tg`, ветка `main` |
-| Совпадает | весь `src/**`, кроме 25 файлов ниже; `public/mailto.html`, `src/db/backupText.ts`; `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `scripts/bump-version.mjs`, `scripts/telegram-release.mjs`, `release-assets/*` |
-| Только здесь | `public/route.html` — страница-мост для маршрута: в Android-версии системный выбор навигатора даёт `geo:`-intent Capacitor, а мини-приложению нужна страница в браузере клиента (см. строку `src/utils/navigation.ts` ниже) |
+| `src/**` | 70 файлов в upstream, 92 здесь: 51 совпадает, 19 с локальной адаптацией, 22 только здесь |
+| Совпадает вне `src/` | 46 файлов: `public/mailto.html`, `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `package-lock.json`, `LICENSE`, `release-assets/**` (по `v1.5.0` включительно), `scripts/bump-version.mjs`, `scripts/telegram-release.mjs`, `scripts/fixtures/*`, `scripts/shots/*` (съёмка скриншотов: клиент DevTools, демо-база, оптимизация кадров), `android/**` кроме ассетов значка |
+| Только здесь вне `src/` | `public/route.html` — страница-мост для маршрута (в Android-версии системный выбор навигатора даёт `geo:`-intent Capacitor, а мини-приложению нужна страница в браузере клиента); `public/sw.js`, `docs/TELEGRAM_ARCHITECTURE.md`, `docs/UPSTREAM_SYNC.md`, `scripts/telegram-bot.mjs`, `scripts/sync-from-selfcrm.mjs`, `.github/workflows/ci.yml`, `.github/workflows/sync-from-selfcrm.yml`, `.github/workflows/telegram-release.yml.disabled`, `.sync-state.json`, `android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml` (передний план адаптивного значка — в upstream он не нужен, там знак рисует `scripts/make-icons.py`) |
+| Только в upstream | `.github/workflows/telegram-release.yml`, `scripts/make-icons.py` и обложки `release-assets/v1.5.1`, `release-assets/v1.5.2`, `release-assets/v1.6.0`: здесь релизы не публикуются, поэтому обложек для новых версий нет |
 
-**Файлы с локальной адаптацией (25)** — их придётся сливать вручную, если upstream их тронет:
+**Файлы с локальной адаптацией** — 19 в `src/**` (все перечислены ниже) и вне `src/`:
+`index.html`, `package.json`, `.gitignore`, `.env.example`, `README.md`, `ARCHITECTURE.md`,
+`ANDROID.md`, `docs/TELEGRAM_RELEASES.md`, `.github/workflows/deploy-pages.yml` и ассеты значка
+и заставки (`android/app/src/main/res/**`). Их придётся сливать вручную, если upstream их тронет:
 
 | Файл | Чем отличается |
 | --- | --- |
@@ -61,16 +67,19 @@ workflow не упадёт: ветка синхронизации всё рав�
 | `src/screens/Settings.tsx` | раздел Telegram, облачная копия, предпросмотр перед импортом; служебные копии в мини-приложении отдаются иначе, чем файлом: «Вернуть» (состояние до импорта возвращается прямо в приложении) и «Скопировать» (повреждённые данные текстом) вместо «Скачать» |
 | `src/screens/OrderDetail.tsx` | чек и «Поделиться» вместо сохранения файла |
 | `src/utils/navigation.ts`, `src/utils/navigation.test.ts` | распознавание адреса клиента внутри Telegram и `openExternalLink` для ссылок; внутри мини-приложения маршрут открывает страница-мост `public/route.html` (`routeBridgeUrl()`): клиент пропускает через `openLink` только `http`/`https`, поэтому `geo:` отдаёт браузер клиента — Android показывает системный выбор навигатора, как в upstream; в браузере адрес отдаётся Яндекс.Картам поиском (`?text=<адрес>`), маршрутная ссылка — только по координатам |
-| `public/route.html` | страница-мост для маршрута: передаёт `geo:0,0?q=<адрес>` системе и показывает список навигаторов, если системный выбор не появился |
-| `src/pdf/documents.ts` (+ `src/pdf/documents.test.ts`) | отдача документа браузеру вместо файловой системы |
 | `src/db/addresses.ts`, `src/db/addresses.test.ts` | `readUserAddresses()` — отличает свою базу адресов от демо-набора |
+| `src/pdf/documents.ts` | отдача документа браузеру вместо файловой системы |
 | `src/db/backup.ts` | сохранение файла копии: веб-загрузка и `Share` вместо `Filesystem`; имена служебных копий (`preImportFileName()`, `corruptedFileName()`) и разбор копии перед импортом (`parsePreImportCopy()`): в мини-приложении её отдают не файлом, а возвратом данных на месте |
 | `src/db/backup.test.ts` | проверки формата копии, облака и BOM, возврата копии до импорта и имён служебных копий; проверка записи файла с `Encoding.UTF8` живёт в версии этого теста в upstream |
 | `index.html` | CSP, `telegram-web-app.js`, тема до первой отрисовки |
 | `package.json` | версия и состав зависимостей Telegram-слоя |
 | `.gitignore`, `.env.example` | локальные файлы протокола и бота, переменные сборки Mini App |
-| `README.md`, `ARCHITECTURE.md`, `ANDROID.md` | описание Telegram-версии |
+| `README.md`, `ARCHITECTURE.md`, `ANDROID.md` | описание Telegram-версии; в `ANDROID.md` дополнительно сказано, что подписи (`keystore.properties`) в этой копии нет и для проверки сборки хватает `assembleDebug` |
 | `docs/TELEGRAM_RELEASES.md` | пометка, что автопубликация релизов здесь отключена |
+| `src/api/dadata.ts`, `src/api/dadata.test.ts` | общий запрос подсказок `requestSuggestions()` и `toAddressPoint()`: точность координат (`qc_geo`) нужна маршруту |
+| `src/screens/ClientDetail.tsx` | комментарий к кнопке маршрута: с адресом Яндекс ищет улицу и дом сам, без адреса — по сохранённым координатам |
+| `.github/workflows/deploy-pages.yml` | здесь публикует Mini App на Pages (плюс пояснение адреса и `base: './'` в шапке файла); в upstream тот же workflow собирает веб-версию приложения |
+| ассеты значка и заставки (`android/app/src/main/res/**`) | здесь остались шаблонные ресурсы Capacitor (фон `#FFFFFF`, сетка-направляющие в `ic_launcher_background.xml`), в upstream — знак «S» и синий фон, собранные `scripts/make-icons.py` |
 
 **Файлы только здесь** (upstream не должен их перезаписывать):
 
@@ -81,6 +90,10 @@ src/components/SupportBanner.tsx    плашка «Поддержите разр
 src/utils/support.ts (+ тест)       правила показа плашки, суммы и ссылки на счета
 src/db/supportState.ts (+ тест)     хранение состояния плашки: облако Telegram или localStorage
 src/db/backupFormat.ts (+ тесты)    формат файла копии v1 и его разбор
+src/db/cloudBackup.ts (+ тест)      облачная копия базы в Telegram CloudStorage
+src/pdf/receipt.ts, src/pdf/receiptDelivery.ts (+ тесты)  чек: сборка и отдача в облако
+src/pdf/documents.test.ts           проверки отдачи документа браузером
+src/screens/ReceiptView.tsx         экран чека в мини-приложении
 public/sw.js                        service worker: офлайн-оболочка страницы
 docs/TELEGRAM_ARCHITECTURE.md       эксплуатация Mini App
 docs/UPSTREAM_SYNC.md               этот документ
@@ -88,7 +101,7 @@ scripts/telegram-bot.mjs            бот-лаунчер @fastcrm_bot
 scripts/sync-from-selfcrm.mjs       перенос изменений upstream
 .github/workflows/sync-from-selfcrm.yml, .github/workflows/ci.yml
 .github/workflows/telegram-release.yml.disabled
-.sync-state.json, PROMPT.md, .env (не коммитится)
+.sync-state.json, .env (не коммитится)
 ```
 
 ### Пример: перенос 1.5.0 → 1.5.1 (обратная связь)
@@ -130,11 +143,12 @@ scripts/sync-from-selfcrm.mjs       перенос изменений upstream
 
 ## 2. Правило минимальной дивергенции
 
-Список из 24 файлов — это цена адаптации: чем он длиннее, тем чаще синхронизация упирается
-в ручное слияние. Поэтому:
+Список из 19 файлов `src/**` (плюс девять файлов вне `src/`) — это цена адаптации: чем он
+длиннее, тем чаще синхронизация упирается в ручное слияние. Поэтому:
 
 - Telegram-логику складываем в отдельные модули (`src/telegram/**`, `TelegramShell.tsx`),
-  а не размазываем по общим файлам. Именно поэтому 90% `src/**` осталось идентичным upstream;
+  а не размазываем по общим файлам. Именно поэтому 51 файл `src/**` совпадает с upstream байт
+  в байт (это 73% от 70 файлов `src/**` в upstream);
 - правка в файле из списка «совпадает с upstream» — исключительный случай: каждый такой файл
   становится ещё одной точкой конфликта;
 - обратный перенос полезен тоже: наши доработки копий (`src/db/backupFormat.ts`, предпросмотр
@@ -182,7 +196,8 @@ Workflow `.github/workflows/sync-from-selfcrm.yml` — запуск по рас�
 
 Цена: текущая история этого репозитория (5 коммитов копии) будет переписана — нужен force-push,
 а старых коммитов в `main` не останется (ветку можно сохранить для истории). Набор конфликтов
-тот же — 18 файлов, но решаются штатными средствами git. Решение за владельцем репозитория.
+тот же — 19 файлов `src/**` плюс файлы вне `src/`, но решаются штатными средствами git.
+Решение за владельцем репозитория.
 
 ## 5. Способ C (не выбран): сократить дивергенцию в самом upstream
 
@@ -190,7 +205,7 @@ Workflow `.github/workflows/sync-from-selfcrm.yml` — запуск по рас�
 `src/platform.ts` с `isAndroid` / `isWeb` / `isTelegram`), файлы `main.tsx`, `App.tsx`,
 `ThemeContext.tsx`, `UpdateToast.tsx`, `version.ts`, `index.css`, `index.html` перестанут
 расходиться — и способ A станет почти бесконфликтным. Минус: это правки в Android-репозитории,
-которые [PROMPT.md](../PROMPT.md) запрещает — только по решению владельца.
+которые техзадание Telegram-версии запрещает — только по решению владельца.
 
 ## 6. Бот и «новые фишки»
 
