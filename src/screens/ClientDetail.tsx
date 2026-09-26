@@ -9,7 +9,7 @@ import { ORDER_STATUS_LABEL, type Client } from '../types'
 import { formatDate, money, plural } from '../utils/format'
 import { uid } from '../utils/id'
 import { isPhoneValid } from '../utils/input'
-import { openRouteResolved, openTel, openTelegram, openWhatsApp } from '../utils/navigation'
+import { openRoute, openTel, openTelegram, openWhatsApp } from '../utils/navigation'
 import { formatOrderNumber } from '../utils/orders'
 import { orderPaymentState } from '../utils/payments'
 import { statusTone } from '../utils/status'
@@ -123,16 +123,16 @@ export function ClientDetail({ id }: { id: string }) {
             variant="outline"
             icon="navigation"
             full
-            onClick={() => {
-              // Точка уточняется по адресу (Дадата) — навигатор получает координаты дома.
-              // Ошибку уточнения функция поглощает: маршрут строится по сохранённым координатам.
-              void openRouteResolved({
+            onClick={() =>
+              // С адресом Яндекс ищет улицу и дом сам (поиск по адресу в картах),
+              // без адреса маршрут строится по сохранённым координатам.
+              openRoute({
                 lat: client.latitude ?? 0,
                 lng: client.longitude ?? 0,
                 label: client.name,
                 address: client.address,
               })
-            }}
+            }
           >
             Маршрут
           </Button>

@@ -1,13 +1,12 @@
 // Построение маршрута до адреса клиента.
-// На Android (Capacitor) открывается системный выбор навигатора через geo:-intent —
-// там навигатор сам находит дом по тексту адреса.
-// В Telegram Mini App и в браузере — маршрут в Яндекс.Картах (в Mini App ссылку открывает
-// клиент Telegram, потому что window.open в WebView игнорируется), а ссылка на маршрут
-// задаёт точку координатами: текст в ней разбирают только веб-карты, приложение по такой
-// ссылке открывается без пункта. Координаты перед открытием уточняются по полному адресу
-// (см. resolveRoutePoint), чтобы не уехать в центр населённого пункта.
+// На Android (Capacitor) открывается системный выбор навигатора через geo:-intent.
+// В Telegram Mini App и в браузере — Яндекс.Карты (в Mini App ссылку открывает клиент
+// Telegram, потому что window.open в WebView игнорируется).
+//
+// Адрес передаём текстом, и точку ищет сам Яндекс: в маршрутной ссылке (`rtext`) и веб-карты,
+// и приложение разбирают только координаты — с текстом адреса приложение открывается без
+// пункта назначения, а поиск по адресу (`text`) находит улицу и дом по своей базе.
 
-import { geocodeAddress } from '../api/dadata'
 import { openExternalLink } from '../telegram/webapp'
 
 export interface RoutePoint {
@@ -61,75 +60,40 @@ export function buildRouteUri(dest: RoutePoint): string {
   return `geo:0,0?q=${dest.lat},${dest.lng}${label ? `(${encodeURIComponent(label)})` : ''}`
 }
 
+// Ссылка «адрес в Яндекс.Картах»: точку Яндекс ищет сам по тексту адреса (`text`), поэтому
+// в навигатор уходит улица и дом, а не приблизительные координаты. Так же ведёт себя поиск
+// на сайте карт. Координаты клиента, если они есть, передаём подсказкой `ll` — карта
+// открывается в нужном районе, и поиск не уводит в одноимённую улицу другого посёлка.
+export function buildAddressSearchUri(dest: RoutePoint): string {
+  const query = encodeURIComponent((dest.address ?? '').trim())
+  const hint = hasRouteCoords(dest) ? `&ll=${dest.lng},${dest.lat}` : ''
+  return `https://yandex.ru/maps/?text=${query}${hint}`
+}
+
 // https-ссылка на маршрут в Яндекс.Картах: `~` означает «откуда» = текущее местоположение
-// пользователя, дальше идёт точка назначения. Точку задаём координатами: приложение Яндекс.Карт
-// и Навигатор разбирают в такой ссылке только координаты — с текстом адреса они открываются
-// без пункта назначения. Текст остаётся запасным вариантом, когда координат у клиента нет:
-// такую ссылку понимают веб-карты, они находят дом сами.
+// пользователя, дальше идёт точка назначения. Нужна, когда адреса у клиента нет и точку задают
+// только координаты: текст адреса такая ссылка не принимает (см. buildAddressSearchUri).
 export function buildWebRouteUri(dest: RoutePoint): string {
-  const target = hasRouteCoords(dest)
-    ? `${dest.lat},${dest.lng}`
-    : encodeURIComponent((dest.address ?? '').trim())
-  return `https://yandex.ru/maps/?rtext=~${target}&rtt=auto`
-}
-
-// Ждать геокодер долго нельзя: навигатор должен открываться сразу после нажатия.
-const GEOCODE_TIMEOUT_MS = 2500
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(null), ms)
-    promise.then(
-      (value) => {
-        clearTimeout(timer)
-        resolve(value)
-      },
-      () => {
-        // Сервис недоступен (нет сети, нет ключа) — маршрут строим по сохранённым координатам.
-        clearTimeout(timer)
-        resolve(null)
-      },
-    )
-  })
-}
-
-// Уточняет точку маршрута перед открытием: полный адрес спрашиваем у Дадаты, и координаты дома
-// заменяют сохранённые. Нужно потому, что подсказки для деревень, СНТ и новых домов часто
-// указывают на центр населённого пункта, а дом сервис знает. Если дом не найден (qc_geo выше 1)
-// или сервис недоступен, остаются координаты клиента; если координат нет вовсе — берём точку
-// от Дадаты любой точности, потому что ссылку с текстом приложение-навигатор не понимает.
-export async function resolveRoutePoint(dest: RoutePoint): Promise<RoutePoint> {
-  const address = (dest.address ?? '').trim()
-  if (!address) return dest
-
-  const point = await withTimeout(geocodeAddress(address), GEOCODE_TIMEOUT_MS)
-  if (!point) return dest
-  if (!hasRouteCoords(dest) || point.houseLevel) {
-    return { ...dest, lat: point.lat, lng: point.lng }
-  }
-  return dest
-}
-
-// Открывает маршрут, уточнив точку по адресу (см. resolveRoutePoint). Именно эту функцию
-// вызывает кнопка «Маршрут» в карточке клиента.
-export async function openRouteResolved(dest: RoutePoint): Promise<void> {
-  openRoute(await resolveRoutePoint(dest))
+  return `https://yandex.ru/maps/?rtext=~${dest.lat},${dest.lng}&rtt=auto`
 }
 
 export function openRoute(dest: RoutePoint): void {
   if (!dest) return
-  // Адрес важнее координат: по нему навигатор находит дом сам. Оба пустые — открывать нечего.
-  if (!hasRouteCoords(dest) && !(dest.address ?? '').trim()) return
+  const address = (dest.address ?? '').trim()
+  // Открывать нечего: ни адреса, ни координат.
+  if (!address && !hasRouteCoords(dest)) return
 
   if (isNativeAndroid()) {
-    // `_system` заставляет Capacitor передать ссылку операционной системе,
-    // которая показывает выбор приложения для навигации.
+    // `_system` заставляет Capacitor передать ссылку операционной системе, которая показывает
+    // выбор приложения для навигации, а `geo:0,0?q=<адрес>` находит дом по тексту адреса.
     window.open(buildRouteUri(dest), '_system')
     return
   }
 
   // В браузере — новая вкладка, в Telegram Mini App — средства клиента Telegram.
-  openExternalLink(buildWebRouteUri(dest))
+  // С адресом отдаём Яндексу поиск по адресу (дом найдёт он сам), без адреса — маршрут
+  // по координатам: он открывается сразу с пунктом назначения.
+  openExternalLink(address ? buildAddressSearchUri(dest) : buildWebRouteUri(dest))
 }
 
 // tel:-URI для звонка клиенту. Убираем из номера всё, кроме цифр и ведущего «+»,
