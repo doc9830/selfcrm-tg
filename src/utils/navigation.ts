@@ -1,13 +1,18 @@
 // Построение маршрута до адреса клиента.
-// На Android (Capacitor) открывается системный выбор навигатора через geo:-intent.
-// В Telegram Mini App и в браузере — Яндекс.Карты (в Mini App ссылку открывает клиент
-// Telegram, потому что window.open в WebView игнорируется).
 //
-// Адрес передаём текстом, и точку ищет сам Яндекс: в маршрутной ссылке (`rtext`) и веб-карты,
-// и приложение разбирают только координаты — с текстом адреса приложение открывается без
-// пункта назначения, а поиск по адресу (`text`) находит улицу и дом по своей базе.
+// На Android (Capacitor) открывается системный выбор навигатора через geo:-intent.
+//
+// В Telegram Mini App тот же системный выбор получается через страницу-мост (public/route.html):
+// сам клиент geo:-ссылки не принимает — официальный telegram-web-app.js выбрасывает ошибку для
+// всех схем, кроме http/https, — поэтому клиенту отдаётся страница рядом с приложением, а он
+// открывает её в своём браузере: там geo:-ссылку принимает уже браузер и передаёт системе
+// (Android показывает выбор приложения, как в APK-версии).
+//
+// В браузере — Яндекс.Карты поиском по адресу (`text`): улицу и дом Яндекс ищет сам по своей базе.
+// Маршрутная ссылка (`rtext`) годится только для координат: текст адреса она не принимает и
+// открывается без пункта назначения.
 
-import { openExternalLink } from '../telegram/webapp'
+import { insideTelegramWebView, openExternalLink } from '../telegram/webapp'
 
 export interface RoutePoint {
   lat: number
@@ -77,6 +82,37 @@ export function buildWebRouteUri(dest: RoutePoint): string {
   return `https://yandex.ru/maps/?rtext=~${dest.lat},${dest.lng}&rtt=auto`
 }
 
+// Страница-мост для маршрута (public/route.html). Клиент Telegram отдаёт её своему браузеру,
+// а браузер уже передаёт geo:-ссылку системе — так в мини-приложении получается системный выбор
+// навигатора, как в APK-версии. Сам клиент geo: не принимает: официальный telegram-web-app.js
+// выбрасывает ошибку для всех схем, кроме http/https (openLink).
+const ROUTE_BRIDGE_PAGE = 'route.html'
+
+// Адрес страницы-моста собирается от текущего адреса приложения, поэтому работает и на GitHub
+// Pages, и при любой другой раздаче. null — собрать не удалось (нет окна или нечего открывать):
+// тогда остаётся обычная ссылка на карты.
+export function routeBridgeUrl(dest: RoutePoint): string | null {
+  if (typeof window === 'undefined' || !window.location) return null
+  const address = (dest.address ?? '').trim()
+  if (!address && !hasRouteCoords(dest)) return null
+  try {
+    const page = new URL(ROUTE_BRIDGE_PAGE, window.location.href)
+    // У адреса приложения свой хеш-маршрут («#/clients/<id>») и параметры: мосту не нужны.
+    page.hash = ''
+    page.search = ''
+    if (address) page.searchParams.set('address', address)
+    if (hasRouteCoords(dest)) {
+      page.searchParams.set('lat', String(dest.lat))
+      page.searchParams.set('lng', String(dest.lng))
+    }
+    const label = (dest.label ?? '').trim()
+    if (label) page.searchParams.set('label', label)
+    return page.toString()
+  } catch {
+    return null
+  }
+}
+
 export function openRoute(dest: RoutePoint): void {
   if (!dest) return
   const address = (dest.address ?? '').trim()
@@ -90,9 +126,18 @@ export function openRoute(dest: RoutePoint): void {
     return
   }
 
-  // В браузере — новая вкладка, в Telegram Mini App — средства клиента Telegram.
-  // С адресом отдаём Яндексу поиск по адресу (дом найдёт он сам), без адреса — маршрут
-  // по координатам: он открывается сразу с пунктом назначения.
+  // Telegram Mini App: клиент открывает geo:-ссылку сам не может, зато открывает страницу-мост —
+  // её обработкой занимается его браузер, и система показывает выбор приложения для навигации.
+  if (insideTelegramWebView()) {
+    const bridge = routeBridgeUrl(dest)
+    if (bridge) {
+      openExternalLink(bridge)
+      return
+    }
+  }
+
+  // Браузер — новая вкладка. С адресом отдаём Яндексу поиск по адресу (дом найдёт он сам),
+  // без адреса — маршрут по координатам: он открывается сразу с пунктом назначения.
   openExternalLink(address ? buildAddressSearchUri(dest) : buildWebRouteUri(dest))
 }
 

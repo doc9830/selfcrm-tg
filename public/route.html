@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Маршрут в SelfCRM</title>
+    <!--
+      Страница-мост для маршрута (public/route.html).
+
+      Зачем она нужна. Кнопка «Маршрут» передаёт навигатору полный адрес клиента (улицу и дом).
+      В браузере и в Android-приложении (Capacitor) для этого хватает geo:-ссылки: операционная
+      система сама показывает выбор приложения для навигации («Открыть с помощью приложения»).
+      Внутри мини-приложения Telegram так нельзя: официальный telegram-web-app.js отказывается
+      передавать клиенту любые схемы, кроме http и https (`openLink` выбрасывает ошибку), а
+      сам WebView geo:-ссылки не открывает — нажатие выглядело бы как «ничего не произошло».
+
+      Поэтому мини-приложение открывает в браузере клиента эту страницу, а она отдаёт geo:-ссылку
+      уже из браузера: так система получает тот же intent, что и в APK-версии, и показывает выбор
+      навигатора. Координаты клиента едут подсказкой (`ll` в ссылках карт): подсказки адресов для
+      деревень, СНТ и новых домов часто указывают на центр населённого пункта, поэтому точку
+      задаёт адрес, а координаты только помогают карте открыться в нужном районе.
+
+      Если ничего не открылось (навигатор не установлен, браузер запретил переход без нажатия),
+      на странице остаётся список приложений и кнопка «Скопировать адрес»: нажатие пользователя —
+      уже жест, которого требуют браузеры. Данные никуда не отправляются: адрес пришёл в ссылке
+      из приложения и живёт только в этой вкладке.
+    -->
+    <style>
+      :root {
+        --bg: #f4f5f7;
+        --surface: #ffffff;
+        --border: #e6e8ec;
+        --text: #111827;
+        --text-muted: #6b7280;
+        --primary: #2563eb;
+        --primary-strong: #1d4ed8;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f172a;
+          --surface: #16203a;
+          --border: #24314f;
+          --text: #f1f5f9;
+          --text-muted: #9aa8bd;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: flex;
+        justify-content: center;
+        padding: 24px 16px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+          Arial, sans-serif;
+        font-size: 15px;
+        line-height: 1.45;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      main {
+        width: 100%;
+        max-width: 560px;
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+        padding: 16px;
+      }
+
+      .mark {
+        width: 40px;
+        height: 40px;
+        border-radius: 11px;
+        background: var(--primary);
+        color: #fff;
+        font-size: 25px;
+        font-weight: 700;
+        line-height: 40px;
+        text-align: center;
+        margin-bottom: 12px;
+      }
+
+      h1 {
+        font-size: 18px;
+        margin: 0 0 6px;
+      }
+
+      p {
+        margin: 0 0 12px;
+        color: var(--text-muted);
+        font-size: 13.5px;
+      }
+
+      dl {
+        margin: 0 0 12px;
+        font-size: 13.5px;
+      }
+
+      dt {
+        color: var(--text-muted);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-top: 8px;
+      }
+
+      dd {
+        margin: 2px 0 0;
+        word-break: break-word;
+      }
+
+      .apps {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      button,
+      .link {
+        flex: 1 1 auto;
+        padding: 10px 14px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        text-align: center;
+        text-decoration: none;
+        cursor: pointer;
+      }
+
+      .link {
+        display: block;
+      }
+
+      button.primary,
+      .link.primary {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: #fff;
+      }
+
+      button.primary:active,
+      .link.primary:active {
+        background: var(--primary-strong);
+      }
+
+      .note {
+        margin: 14px 0 0;
+        font-size: 12.5px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="card">
+        <div class="mark" aria-hidden="true">→</div>
+        <h1>Маршрут до клиента</h1>
+        <p id="hint">Открываем выбор приложения для навигации.</p>
+
+        <dl>
+          <dt>Адрес</dt>
+          <dd id="address">—</dd>
+        </dl>
+
+        <ul class="apps">
+          <li><a class="link primary" id="geo" href="#">Открыть выбор приложений</a></li>
+          <li><a class="link" id="yandex" href="#" rel="noreferrer noopener">Яндекс.Карты</a></li>
+          <li><a class="link" id="google" href="#" rel="noreferrer noopener">Google Карты</a></li>
+          <li><a class="link" id="dgis" href="#" rel="noreferrer noopener">2ГИС</a></li>
+          <li><a class="link" id="apple" href="#" rel="noreferrer noopener">Apple Карты</a></li>
+        </ul>
+
+        <div class="actions">
+          <button id="copy" type="button">Скопировать адрес</button>
+        </div>
+
+        <p class="note">
+          Системный выбор появляется, если в телефоне установлено больше одного навигатора.
+          Ничего не открылось — выберите приложение из списка выше.
+        </p>
+      </div>
+    </main>
+    <script>
+      // Параметры адреса: полный адрес клиента и его координаты (см. routeBridgeUrl в
+      // src/utils/navigation.ts). Данные никуда не отправляются — они пришли в ссылке и
+      // живут только в этой вкладке.
+      const params = new URLSearchParams(window.location.search)
+      const address = (params.get('address') || '').trim()
+      const label = (params.get('label') || '').trim()
+      const lat = params.get('lat') || ''
+      const lng = params.get('lng') || ''
+      const point = lat && lng ? `${lat},${lng}` : ''
+
+      // Точка маршрута: адрес важнее координат — подсказки для деревень, СНТ и новых домов
+      // часто указывают на центр населённого пункта, а дом находит сам навигатор по адресу.
+      const place = address || point
+      const caption = address && label ? `${label} (${address})` : address || label
+
+      // geo:-ссылка — та же, что передаёт Android-сборка (buildRouteUri): система открывает её
+      // выбранным приложением и показывает выбор приложений, если их несколько.
+      const query = address
+        ? encodeURIComponent(address)
+        : `${point}${label ? `(${encodeURIComponent(label)})` : ''}`
+      const geo = `geo:0,0?q=${query}`
+
+      const setLink = (id, href) => {
+        const link = document.getElementById(id)
+        if (link) link.href = href
+      }
+
+      const setText = (id, text) => {
+        const node = document.getElementById(id)
+        if (node) node.textContent = text
+      }
+
+      setText('address', caption || '—')
+      setLink('geo', geo)
+      // Яндекс ищет дом по тексту адреса сам; координаты — подсказка, в каком районе искать.
+      setLink(
+        'yandex',
+        `https://yandex.ru/maps/?text=${encodeURIComponent(address || point)}${
+          point ? `&ll=${lng},${lat}` : ''
+        }`,
+      )
+      // Ссылка Google принимает и адрес, и координаты, и сразу строит маршрут.
+      setLink(
+        'google',
+        `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(place)}`,
+      )
+      setLink(
+        'dgis',
+        address
+          ? `https://2gis.ru/search/${encodeURIComponent(address)}`
+          : `https://2gis.ru/geo/${lng},${lat}`,
+      )
+      setLink('apple', `https://maps.apple.com/?daddr=${encodeURIComponent(place)}`)
+
+      const copy = document.getElementById('copy')
+      if (copy) {
+        copy.addEventListener('click', async () => {
+          const text = caption || place
+          let done = false
+          try {
+            await navigator.clipboard.writeText(text)
+            done = true
+          } catch {
+            // Ниже — запасной способ: Clipboard API отказывает без разрешения.
+          }
+          if (!done) {
+            const area = document.createElement('textarea')
+            area.value = text
+            area.setAttribute('readonly', '')
+            area.style.position = 'fixed'
+            area.style.top = '-1000px'
+            document.body.appendChild(area)
+            area.select()
+            try {
+              done = document.execCommand('copy')
+            } catch {
+              done = false
+            }
+            document.body.removeChild(area)
+          }
+          copy.textContent = done ? 'Скопировано' : 'Выделите адрес вручную'
+          window.setTimeout(() => {
+            copy.textContent = 'Скопировать адрес'
+          }, 2000)
+        })
+      }
+
+      // Пробуем отдать маршрут системе сразу: браузер передаёт geo:-ссылку операционной системе,
+      // и та показывает список приложений — так же, как это делает Android-сборка приложения.
+      if (place) {
+        window.location.replace(geo)
+      } else {
+        setText('hint', 'В ссылке нет ни адреса, ни координат — открывать нечего.')
+      }
+    </script>
+  </body>
+</html>

@@ -22,6 +22,7 @@ import {
   openTelegram,
   openWhatsApp,
   phoneDigits,
+  routeBridgeUrl,
 } from './navigation'
 
 afterEach(() => {
@@ -29,15 +30,23 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-// Заглушка окна: запоминает вызовы window.open, отдаёт объект Telegram WebApp и флаг
-// нативной сборки — так проверяются все три окружения открытия ссылок.
-function stubWindow(options: { webApp?: Partial<TelegramWebApp>; native?: boolean } = {}) {
+// Заглушка окна: запоминает вызовы window.open, отдаёт объект Telegram WebApp, адрес
+// приложения (от него собираются страницы-мосты) и флаг нативной сборки — так проверяются
+// все три окружения открытия ссылок.
+function stubWindow(
+  options: {
+    webApp?: Partial<TelegramWebApp>
+    native?: boolean
+    location?: { href: string }
+  } = {},
+) {
   const calls: Array<{ url: string; target?: string }> = []
   vi.stubGlobal('window', {
     Telegram: options.webApp ? { WebApp: options.webApp } : undefined,
     Capacitor: options.native
       ? { isNativePlatform: () => true, getPlatform: () => 'android' }
       : undefined,
+    location: options.location ?? { href: 'https://doc9830.github.io/selfcrm-tg/#/clients/1' },
     open: (url: string, target?: string) => {
       calls.push({ url, target })
       return {}
@@ -116,6 +125,43 @@ describe('buildWebRouteUri', () => {
   })
 })
 
+describe('routeBridgeUrl', () => {
+  it('кладёт в параметры полный адрес, координаты подсказкой и имя клиента', () => {
+    stubWindow()
+    const address = 'Московская обл, Одинцовский г.о., д. Ракитня, ул. Дачная, д. 7'
+
+    const url = new URL(String(routeBridgeUrl({ lat: 55.6, lng: 36.9, address, label: 'Иванов' })))
+
+    expect(`${url.origin}${url.pathname}`).toBe('https://doc9830.github.io/selfcrm-tg/route.html')
+    expect(url.searchParams.get('address')).toBe(address)
+    expect(url.searchParams.get('lat')).toBe('55.6')
+    expect(url.searchParams.get('lng')).toBe('36.9')
+    expect(url.searchParams.get('label')).toBe('Иванов')
+  })
+
+  it('без адреса передаёт только координаты', () => {
+    stubWindow()
+
+    const url = new URL(String(routeBridgeUrl({ lat: 55.76, lng: 37.61 })))
+
+    expect(url.searchParams.get('address')).toBeNull()
+    expect(url.searchParams.get('lat')).toBe('55.76')
+    expect(url.searchParams.get('label')).toBeNull()
+  })
+
+  it('без адреса и координат страницу-мост не собирает', () => {
+    stubWindow()
+
+    expect(routeBridgeUrl({ lat: 0, lng: 0, address: '   ' })).toBeNull()
+  })
+
+  it('без окна (проверки, серверный рендер) ссылку собрать нечем', () => {
+    vi.stubGlobal('window', undefined)
+
+    expect(routeBridgeUrl({ lat: 55.76, lng: 37.61 })).toBeNull()
+  })
+})
+
 describe('openRoute', () => {
   it('в Android-сборке отдаёт системе geo:-ссылку с полным адресом', () => {
     capacitor.native = true
@@ -146,23 +192,46 @@ describe('openRoute', () => {
     expect(calls).toEqual([{ url: 'geo:0,0?q=55.76,37.61(Home)', target: '_system' }])
   })
 
-  it('в Telegram Mini App отдаёт Яндексу адрес: улицу и дом ищет он сам', () => {
+  it('в Telegram Mini App отдаёт клиенту страницу-мост: её браузер показывает выбор навигатора', () => {
     const openLink = vi.fn()
     const calls = stubWindow({ webApp: { initData: 'query_id=1', platform: 'android', openLink } })
     const address = 'Московская обл, Одинцовский г.о., д. Ракитня, ул. Дачная, д. 7'
 
     openRoute({ lat: 55.6, lng: 36.9, address })
 
-    expect(openLink).toHaveBeenCalledWith(
-      `https://yandex.ru/maps/?text=${encodeURIComponent(address)}&ll=36.9,55.6`,
-    )
+    // Сам клиент geo:-ссылки не принимает (openLink разрешает только http/https), поэтому
+    // в его браузер уходит страница-мост: там geo: передаётся системе, как в Android-сборке.
+    expect(openLink).toHaveBeenCalledTimes(1)
+    const url = new URL(String(openLink.mock.calls[0][0]))
+    expect(`${url.origin}${url.pathname}`).toBe('https://doc9830.github.io/selfcrm-tg/route.html')
+    expect(url.searchParams.get('address')).toBe(address)
+    expect(url.searchParams.get('lat')).toBe('55.6')
+    expect(url.searchParams.get('lng')).toBe('36.9')
     // window.open в WebView мини-приложения игнорируется — использовать его нельзя.
     expect(calls).toEqual([])
   })
 
-  it('в Telegram Mini App без адреса строит маршрут по координатам', () => {
+  it('в Telegram Mini App без адреса тоже отдаёт мост — с координатами и именем клиента', () => {
     const openLink = vi.fn()
     stubWindow({ webApp: { initData: 'query_id=1', platform: 'android', openLink } })
+
+    openRoute({ lat: 55.76, lng: 37.61, label: 'Иванов' })
+
+    const url = new URL(String(openLink.mock.calls[0][0]))
+    expect(url.searchParams.get('address')).toBeNull()
+    expect(url.searchParams.get('lat')).toBe('55.76')
+    expect(url.searchParams.get('lng')).toBe('37.61')
+    expect(url.searchParams.get('label')).toBe('Иванов')
+  })
+
+  it('в Telegram Mini App без адреса страницы приложения остаётся маршрут по координатам', () => {
+    const openLink = vi.fn()
+    // Адрес приложения клиенту не сообщается (например, страница открыта из локального файла):
+    // страницу-мост собрать нечем, поэтому отдаём обычную ссылку на карты.
+    stubWindow({
+      webApp: { initData: 'query_id=1', platform: 'android', openLink },
+      location: { href: 'about:blank' },
+    })
 
     openRoute({ lat: 55.76, lng: 37.61 })
 

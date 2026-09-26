@@ -45,6 +45,7 @@ workflow не упадёт: ветка синхронизации всё рав�
 | Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.5.2` | 
 | Mini App | `doc9830/selfcrm-tg`, ветка `main` |
 | Совпадает | весь `src/**`, кроме 25 файлов ниже; `public/mailto.html`, `src/db/backupText.ts`; `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `scripts/bump-version.mjs`, `scripts/telegram-release.mjs`, `release-assets/*` |
+| Только здесь | `public/route.html` — страница-мост для маршрута: в Android-версии системный выбор навигатора даёт `geo:`-intent Capacitor, а мини-приложению нужна страница в браузере клиента (см. строку `src/utils/navigation.ts` ниже) |
 
 **Файлы с локальной адаптацией (25)** — их придётся сливать вручную, если upstream их тронет:
 
@@ -59,7 +60,8 @@ workflow не упадёт: ветка синхронизации всё рав�
 | `src/index.css` | safe area Telegram (`--tg-safe-area-inset-*`), высота окна |
 | `src/screens/Settings.tsx` | раздел Telegram, облачная копия, предпросмотр перед импортом |
 | `src/screens/OrderDetail.tsx` | чек и «Поделиться» вместо сохранения файла |
-| `src/utils/navigation.ts`, `src/utils/navigation.test.ts` | распознавание адреса клиента внутри Telegram и `openExternalLink` для ссылок Яндекс.Карт; адрес отдаётся Яндекс.Картам поиском (`?text=<адрес>`), маршрутная ссылка — только по координатам; `geo:`-ссылка по тексту адреса совпадает с upstream |
+| `src/utils/navigation.ts`, `src/utils/navigation.test.ts` | распознавание адреса клиента внутри Telegram и `openExternalLink` для ссылок; внутри мини-приложения маршрут открывает страница-мост `public/route.html` (`routeBridgeUrl()`): клиент пропускает через `openLink` только `http`/`https`, поэтому `geo:` отдаёт браузер клиента — Android показывает системный выбор навигатора, как в upstream; в браузере адрес отдаётся Яндекс.Картам поиском (`?text=<адрес>`), маршрутная ссылка — только по координатам |
+| `public/route.html` | страница-мост для маршрута: передаёт `geo:0,0?q=<адрес>` системе и показывает список навигаторов, если системный выбор не появился |
 | `src/pdf/documents.ts` (+ `src/pdf/documents.test.ts`) | отдача документа браузеру вместо файловой системы |
 | `src/db/addresses.ts`, `src/db/addresses.test.ts` | `readUserAddresses()` — отличает свою базу адресов от демо-набора |
 | `src/db/backup.ts` | сохранение файла копии: веб-загрузка и `Share` вместо `Filesystem` |
