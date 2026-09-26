@@ -199,4 +199,23 @@ describe('backup: повреждённый файл не трогает данн
     expect(parsed.addresses).toBeNull()
     expect(target.getClients()).toHaveLength(1)
   })
+
+  it('BOM и пробелы по краям разбору не мешают', () => {
+    // Файл копии проходит через чат, почту и редакторы: там и появляется BOM.
+    const source = dbWithClient()
+    const target = new Database(new MemoryStore())
+
+    expect(restoreBackup(target, `\uFEFF\n  ${buildBackupJson(source)}\n`).legacy).toBe(false)
+    expect(target.getClients()).toHaveLength(1)
+  })
+
+  it('копия Android-версии с BOM тоже принимается', () => {
+    const source = dbWithClient()
+    const target = new Database(new MemoryStore())
+
+    const parsed = restoreBackup(target, `\uFEFF${source.exportData()}\r\n`)
+
+    expect(parsed.legacy).toBe(true)
+    expect(target.getClients()).toHaveLength(1)
+  })
 })

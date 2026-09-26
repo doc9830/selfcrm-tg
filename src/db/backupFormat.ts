@@ -29,6 +29,7 @@ import { APP_VERSION } from '../version'
 import { getTelegramUserId, getTelegramUserLabel, isTelegramEnvironment } from '../telegram/webapp'
 import { uid } from '../utils/id'
 import { readUserAddresses, type AddressEntry } from './addresses'
+import { parseBackupJson } from './backupText'
 import type { Database } from './database'
 
 export const BACKUP_FORMAT = 'selfcrm-backup'
@@ -337,12 +338,10 @@ function readAddresses(value: unknown): AddressEntry[] | null {
 // не повреждены. Любая ошибка — исключение с понятным текстом: интерфейс показывает
 // его пользователю, а данные остаются нетронутыми.
 export function parseBackup(json: string): ParsedBackup {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(json)
-  } catch {
-    throw new Error('Файл резервной копии не читается: это не JSON')
-  }
+  // Разбор терпим к BOM и пробелам по краям (см. db/backupText.ts): файл мог пройти через
+  // чат, почту или редактор. Сообщение о том, что файл не JSON, живёт там же — оно
+  // одинаково и для файла, и для копии из облака.
+  const parsed = parseBackupJson(json)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Файл резервной копии не читается: ожидался объект JSON')
   }

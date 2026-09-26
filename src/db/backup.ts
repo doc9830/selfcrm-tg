@@ -1,7 +1,8 @@
 import { Capacitor } from '@capacitor/core'
-import { Directory, Filesystem } from '@capacitor/filesystem'
+import { Directory, Encoding, Filesystem } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
 import { saveAddresses } from './addresses'
+import { normalizeBackupText } from './backupText'
 import type { Database } from './database'
 import { backupFileName, buildBackupJson, parseBackup, type ParsedBackup } from './backupFormat'
 
@@ -29,6 +30,11 @@ export async function downloadJson(json: string, fileName: string): Promise<void
       data: json,
       directory: Directory.Cache,
       recursive: true,
+      // Без явной кодировки плагин считает данные base64 и декодирует их: JSON-текст
+      // превращался в мусор, и восстановление падало с «Unexpected token … is not valid
+      // JSON». Encoding.UTF8 пишет строку как есть — это и есть формат резервной копии.
+      // (В мини-приложении путь нативный не используется, но код общий с Android-сборкой.)
+      encoding: Encoding.UTF8,
     })
     await Share.share({
       title: fileName,
@@ -54,11 +60,12 @@ export function downloadBackup(db: Database): Promise<void> {
   return downloadJson(buildBackupJson(db), backupFileName())
 }
 
-// Читает выбранный пользователем файл резервной копии.
+// Читает выбранный пользователем файл резервной копии. BOM и пробелы по краям убираются
+// сразу (см. db/backupText.ts): файл мог пройти через чат, почту или редактор.
 export function readBackupFile(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
+    reader.onload = () => resolve(normalizeBackupText(String(reader.result)))
     reader.onerror = () => reject(new Error('Не удалось прочитать файл'))
     reader.readAsText(file)
   })
