@@ -3,7 +3,7 @@
 Этот репозиторий (`doc9830/selfcrm-tg`) — копия Android-проекта `doc9830/SelfCRM`,
 адаптированная под Telegram Mini App по отдельному техзаданию (в репозиторий оно не входит
 и хранится локально). Новые функции появляются в Android-репозитории, и их нужно переносить
-сюда. Документ фиксирует, насколько копии разошлись (замер 26.09.2026: обе версии — 1.6.0),
+сюда. Документ фиксирует, насколько копии разошлись (замер 26.09.2026: обе версии — 1.6.1),
 правило минимальной дивергенции и три способа переносить изменения дальше.
 
 ## Статус
@@ -43,12 +43,12 @@ workflow не упадёт: ветка синхронизации всё рав�
 
 | | |
 | --- | --- |
-| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.6.0` | 
+| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.6.1` | 
 | Mini App | `doc9830/selfcrm-tg`, ветка `main` |
 | `src/**` | 70 файлов в upstream, 92 здесь: 51 совпадает, 19 с локальной адаптацией, 22 только здесь |
 | Совпадает вне `src/` | 46 файлов: `public/mailto.html`, `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `package-lock.json`, `LICENSE`, `release-assets/**` (по `v1.5.0` включительно), `scripts/bump-version.mjs`, `scripts/telegram-release.mjs`, `scripts/fixtures/*`, `scripts/shots/*` (съёмка скриншотов: клиент DevTools, демо-база, оптимизация кадров), `android/**` кроме ассетов значка |
 | Только здесь вне `src/` | `public/route.html` — страница-мост для маршрута (в Android-версии системный выбор навигатора даёт `geo:`-intent Capacitor, а мини-приложению нужна страница в браузере клиента); `public/sw.js`, `docs/TELEGRAM_ARCHITECTURE.md`, `docs/UPSTREAM_SYNC.md`, `scripts/telegram-bot.mjs`, `scripts/set-webhook.mjs`, `worker/`, `wrangler.toml`, `scripts/sync-from-selfcrm.mjs`, `.github/workflows/ci.yml`, `.github/workflows/deploy-worker.yml`, `.github/workflows/sync-from-selfcrm.yml`, `.github/workflows/telegram-release.yml.disabled`, `.sync-state.json`, `android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml` (передний план адаптивного значка — в upstream он не нужен, там знак рисует `scripts/make-icons.py`) |
-| Только в upstream | `.github/workflows/telegram-release.yml`, `scripts/make-icons.py` и обложки `release-assets/v1.5.1`, `release-assets/v1.5.2`, `release-assets/v1.6.0`: здесь релизы не публикуются, поэтому обложек для новых версий нет |
+| Только в upstream | `.github/workflows/telegram-release.yml`, `scripts/make-icons.py` и обложки `release-assets/v1.5.1`, `release-assets/v1.5.2`, `release-assets/v1.6.0`, `release-assets/v1.6.1`: здесь релизы не публикуются, поэтому обложек для новых версий нет |
 
 **Файлы с локальной адаптацией** — 19 в `src/**` (все перечислены ниже) и вне `src/`:
 `index.html`, `package.json`, `.gitignore`, `.env.example`, `README.md`, `ARCHITECTURE.md`,
