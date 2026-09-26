@@ -190,7 +190,7 @@ SelfCRM (React) → KVStore (localStorage) — все данные остают�
 ## Резервное копирование
 
 - Формат файла — версионируемый конверт (`db/backupFormat.ts`):
-  `{ "format": "selfcrm-backup", "version": 1, "createdAt": …, "appVersion": "1.5.0",
+  `{ "format": "selfcrm-backup", "version": 1, "createdAt": …, "appVersion": "1.6.0",
   "app": {…}, "data": { снимок базы } }`.
   Ключи снимка (`clients`, `products`, `orders`, `stockMoves`, `settings`) продублированы в корне
   файла, поэтому копию читает и старая версия SelfCRM (Android-сборка ожидает снимок в корне), а
@@ -502,7 +502,7 @@ Android и в браузере; в чат она отправляется с п�
 `feedbackTopicFromQuery()` в `utils/links.ts`).
 
 Содержимое письма собирает `utils/feedback.ts`: вид обращения и первая строка сообщения
-попадают в тему («SelfCRM 1.5.1 — Ошибка: …»), остальное — в тело (`feedbackSubject`,
+попадают в тему («SelfCRM 1.6.0 — Ошибка: …»), остальное — в тело (`feedbackSubject`,
 `feedbackBody`), и всё вместе складывается в `mailto:`-ссылку на `doc9830@proton.me`
 (`feedbackMailto`). Технические данные (`collectDiagnostics`) — версия, платформа и количество
 записей — добавляются только по галочке: ни имён клиентов, ни сумм, ни содержимого заказов
