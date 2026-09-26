@@ -58,103 +58,125 @@ describe('hasRouteCoords', () => {
 })
 
 describe('buildRouteUri', () => {
-  it('задаёт точку координатами, а адрес передаёт подписью', () => {
+  it('задаёт точку полным текстовым адресом, а не координатами', () => {
     const address = 'г. Москва, ул. Тверская, д. 1'
+    // Координаты из подсказок могут быть приблизительными (центр населённого пункта),
+    // поэтому навигатору отдаём адрес целиком — он найдёт дом по своей базе.
     expect(buildRouteUri({ lat: 55.76, lng: 37.61, address })).toBe(
-      `geo:55.76,37.61?q=55.76,37.61(${encodeURIComponent(address)})`,
+      `geo:0,0?q=${encodeURIComponent(address)}`,
     )
   })
 
-  it('без адреса подписывает точку именем клиента', () => {
-    expect(buildRouteUri({ lat: 55.76, lng: 37.61, label: 'Home' })).toBe(
-      'geo:55.76,37.61?q=55.76,37.61(Home)',
-    )
-  })
-
-  it('оставляет точку без подписи, если ни адреса, ни имени нет', () => {
-    expect(buildRouteUri({ lat: 55.76, lng: 37.61 })).toBe('geo:55.76,37.61?q=55.76,37.61')
-  })
-
-  it('без координат ищет точку по текстовому адресу', () => {
-    const address = 'г. Москва, ул. Тверская, д. 1'
+  it('строит маршрут по адресу, когда координат нет', () => {
+    const address = 'г. Казань, ул. Баумана, д. 20'
     expect(buildRouteUri({ lat: 0, lng: 0, address })).toBe(
       `geo:0,0?q=${encodeURIComponent(address)}`,
     )
   })
 
+  it('без адреса задаёт точку координатами и подписывает её именем клиента', () => {
+    expect(buildRouteUri({ lat: 55.76, lng: 37.61, label: 'Home' })).toBe(
+      'geo:0,0?q=55.76,37.61(Home)',
+    )
+  })
+
+  it('оставляет точку без подписи, если ни адреса, ни имени нет', () => {
+    expect(buildRouteUri({ lat: 55.76, lng: 37.61 })).toBe('geo:0,0?q=55.76,37.61')
+  })
+
   it('игнорирует пустой адрес и берёт координаты', () => {
     expect(buildRouteUri({ lat: 55.76, lng: 37.61, address: '   ' })).toBe(
-      'geo:55.76,37.61?q=55.76,37.61',
+      'geo:0,0?q=55.76,37.61',
     )
   })
 })
 
 describe('buildWebRouteUri', () => {
-  it('строит маршрут в Яндекс.Картах по координатам', () => {
-    expect(buildWebRouteUri({ lat: 55.76, lng: 37.61 })).toBe(
-      'https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto',
-    )
-  })
-
-  it('предпочитает координаты текстовому адресу', () => {
-    expect(buildWebRouteUri({ lat: 55.76, lng: 37.61, address: 'г. Москва, ул. Арбат, д. 12' })).toBe(
-      'https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto',
-    )
-  })
-
-  it('без координат передаёт текстовый адрес', () => {
+  it('передаёт текстовый адрес, чтобы Яндекс нашёл дом сам', () => {
     const address = 'г. Москва, ул. Арбат, д. 12'
+    expect(buildWebRouteUri({ lat: 55.76, lng: 37.61, address })).toBe(
+      `https://yandex.ru/maps/?rtext=~${encodeURIComponent(address)}&rtt=auto`,
+    )
+  })
+
+  it('без координат тоже строит маршрут по адресу', () => {
+    const address = 'г. Казань, ул. Баумана, д. 20'
     expect(buildWebRouteUri({ lat: 0, lng: 0, address })).toBe(
       `https://yandex.ru/maps/?rtext=~${encodeURIComponent(address)}&rtt=auto`,
+    )
+  })
+
+  it('без адреса строит маршрут по координатам', () => {
+    expect(buildWebRouteUri({ lat: 55.76, lng: 37.61 })).toBe(
+      'https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto',
     )
   })
 })
 
 describe('openRoute', () => {
-  it('в Android-сборке отдаёт geo:-ссылку системе', () => {
+  it('в Android-сборке отдаёт системе geo:-ссылку с полным адресом', () => {
+    capacitor.native = true
+    const calls = stubWindow({ native: true })
+    const address = 'г. Москва, ул. Тверская, д. 1'
+
+    openRoute({ lat: 55.76, lng: 37.61, address })
+
+    expect(calls).toEqual([{ url: `geo:0,0?q=${encodeURIComponent(address)}`, target: '_system' }])
+  })
+
+  it('в Android-сборке без координат тоже передаёт адрес', () => {
+    capacitor.native = true
+    const calls = stubWindow({ native: true })
+    const address = 'г. Казань, ул. Баумана, д. 20'
+
+    openRoute({ lat: 0, lng: 0, address })
+
+    expect(calls).toEqual([{ url: `geo:0,0?q=${encodeURIComponent(address)}`, target: '_system' }])
+  })
+
+  it('в Android-сборке без адреса берёт координаты с именем клиента', () => {
     capacitor.native = true
     const calls = stubWindow({ native: true })
 
-    openRoute({ lat: 55.76, lng: 37.61, address: 'г. Москва, ул. Тверская, д. 1' })
+    openRoute({ lat: 55.76, lng: 37.61, label: 'Home' })
 
-    expect(calls).toHaveLength(1)
-    expect(calls[0].target).toBe('_system')
-    expect(calls[0].url.startsWith('geo:55.76,37.61?q=55.76,37.61(')).toBe(true)
+    expect(calls).toEqual([{ url: 'geo:0,0?q=55.76,37.61(Home)', target: '_system' }])
   })
 
-  it('в Android-сборке без координат открывает ссылку Яндекс.Карт по адресу', () => {
-    capacitor.native = true
-    const calls = stubWindow({ native: true })
-
-    openRoute({ lat: 0, lng: 0, address: 'г. Казань, ул. Баумана, д. 20' })
-
-    expect(calls).toEqual([
-      {
-        url: `https://yandex.ru/maps/?rtext=~${encodeURIComponent('г. Казань, ул. Баумана, д. 20')}&rtt=auto`,
-        target: '_system',
-      },
-    ])
-  })
-
-  it('в Telegram Mini App открывает маршрут средствами клиента', () => {
+  it('в Telegram Mini App открывает маршрут по адресу средствами клиента', () => {
     const openLink = vi.fn()
     const calls = stubWindow({ webApp: { initData: 'query_id=1', platform: 'android', openLink } })
+    const address = 'г. Москва, ул. Тверская, д. 1'
 
-    openRoute({ lat: 55.76, lng: 37.61 })
+    openRoute({ lat: 55.76, lng: 37.61, address })
 
-    expect(openLink).toHaveBeenCalledWith('https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto')
+    // Координаты из подсказок могли оказаться приблизительными, поэтому в Яндекс.Карты
+    // уходит текст адреса — карта находит дом сама.
+    expect(openLink).toHaveBeenCalledWith(
+      `https://yandex.ru/maps/?rtext=~${encodeURIComponent(address)}&rtt=auto`,
+    )
     // window.open в WebView мини-приложения игнорируется — использовать его нельзя.
     expect(calls).toEqual([])
   })
 
+  it('в Telegram Mini App без адреса строит маршрут по координатам', () => {
+    const openLink = vi.fn()
+    stubWindow({ webApp: { initData: 'query_id=1', platform: 'android', openLink } })
+
+    openRoute({ lat: 55.76, lng: 37.61 })
+
+    expect(openLink).toHaveBeenCalledWith('https://yandex.ru/maps/?rtext=~55.76,37.61&rtt=auto')
+  })
+
   it('в браузере открывает маршрут в новой вкладке', () => {
     const calls = stubWindow()
+    const address = 'г. Казань, ул. Баумана, д. 20'
 
-    openRoute({ lat: 0, lng: 0, address: 'г. Казань, ул. Баумана, д. 20' })
+    openRoute({ lat: 0, lng: 0, address })
 
     expect(calls).toEqual([
       {
-        url: `https://yandex.ru/maps/?rtext=~${encodeURIComponent('г. Казань, ул. Баумана, д. 20')}&rtt=auto`,
+        url: `https://yandex.ru/maps/?rtext=~${encodeURIComponent(address)}&rtt=auto`,
         target: '_blank',
       },
     ])
