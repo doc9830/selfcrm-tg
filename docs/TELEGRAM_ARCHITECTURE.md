@@ -71,7 +71,7 @@
 | `worker/src/telegram.ts`           | Вызовы Bot API (`telegram()`), `webAppUrl()`, `scrub()` — токен не попадает в логи и в тексты ошибок |
 | `worker/src/support.ts`, `worker/src/whatsnew.ts` | Счета звёздами (`createInvoiceLink`) и changelog релиза (`api.github.com`) |
 | `wrangler.toml`                    | Настройка Worker: `name`, `main`, `compatibility_date`, переменная `WEBAPP_URL`, логи |
-| `.github/workflows/deploy-worker.yml` | Деплой Worker при push в `main` (секреты: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) |
+| `.github/workflows/deploy-worker.yml` | Деплой Worker при push в `main` (секреты `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`; значения читаются и из Secrets, и из Variables; каждая публикация помечается сообщением `GitHub Actions <хеш коммита>`) |
 | `.github/workflows/deploy-pages.yml` | Сборка и публикация статики на GitHub Pages                                    |
 | `.github/workflows/sync-from-selfcrm.yml` | Перенос новых функций Android-версии: `scripts/sync-from-selfcrm.mjs`, отчёт в PR ([UPSTREAM_SYNC.md](./UPSTREAM_SYNC.md)) |
 | `.github/workflows/ci.yml`         | Типы, тесты и сборка на pull request (PR от синхронизации проверяется внутри своего workflow) |

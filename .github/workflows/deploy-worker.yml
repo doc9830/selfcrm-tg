@@ -94,7 +94,10 @@ jobs:
       - name: Deploy Cloudflare Worker
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         run: |
-          if npx wrangler deploy 2>&1 | tee /tmp/deploy.log; then
+          # Сообщение с хешем коммита: версия видна в панели Cloudflare, и по списку деплоев
+          # понятно, что залил именно этот коммит. Без сообщения wrangler пропускает
+          # публикацию, когда код совпадает с уже загруженной версией.
+          if npx wrangler deploy --message "GitHub Actions ${GITHUB_SHA:0:7}" 2>&1 | tee /tmp/deploy.log; then
             echo "Деплой Worker прошёл"
           else
             echo "::error::wrangler deploy упал: $(tail -8 /tmp/deploy.log | tr '\n' ' ' | sed 's/%/%25/g' | sed 's/::/-/g')"

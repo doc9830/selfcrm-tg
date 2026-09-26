@@ -325,8 +325,13 @@ npm run bot:webhook:set -- --url https://selfcrm-bot.<поддомен>.workers.
 (он записывается в `.env`). Если задавать секреты вручную, значения `BOT_TOKEN` и
 `WEBHOOK_SECRET` в Cloudflare и в `.env` должны совпадать.
 5. **Секреты репозитория** — Settings → Secrets and variables → Actions: `CLOUDFLARE_API_TOKEN`
-   и `CLOUDFLARE_ACCOUNT_ID`. Они нужны только для автодеплоя: без них workflow
-   `deploy-worker.yml` пропускает шаг деплоя и печатает предупреждение.
+   и `CLOUDFLARE_ACCOUNT_ID`. Значение можно положить и в раздел **Variables** — workflow читает
+   оба раздела. Они нужны только для автодеплоя: без токена шаг деплоя пропускается с
+   предупреждением, а если токен есть, а Account ID нет, запуск падает на шаге
+   `Credentials: нет CLOUDFLARE_ACCOUNT_ID` с подсказкой, чего не хватает (текст ошибки
+   `wrangler` при этом попадает в аннотацию запуска — она видна без доступа к логам).
+   Каждый автодеплой помечается в панели сообщением `GitHub Actions <хеш коммита>`:
+   Cloudflare → Workers & Pages → selfcrm-bot → **Deployments**.
 6. **Webhook** — `npm run bot:webhook:set` (адрес берётся из `WORKER_URL` в `.env`, записать
    его можно и через `--url`).
 7. **Проверка** — `npm run bot:webhook:info`, затем `/start` в Telegram при выключенном
