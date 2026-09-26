@@ -105,6 +105,9 @@ export interface TelegramWebApp {
   // Открывает чат/канал Telegram внутри клиента: обычный window.open в WebView
   // игнорируется, поэтому без этого вызова нажатие выглядит как «ничего не произошло».
   openTelegramLink?(url: string): void
+  // Оплата звёздами Telegram (Bot API 6.1+): клиент показывает свой платёжный лист,
+  // а результат отдаёт в callback — строка 'paid', 'cancelled', 'failed' или 'pending'.
+  openInvoice?(url: string, callback?: (status: string) => void): void
   onEvent(event: string, handler: () => void): void
   offEvent(event: string, handler: () => void): void
 }
@@ -222,4 +225,15 @@ export function openExternalLink(url: string): BotChatTarget {
 // Открывает чат с ботом (частный случай внешней ссылки).
 export function openBotChat(url: string = TELEGRAM_BOT_URL): BotChatTarget {
   return openExternalLink(url)
+}
+
+// Оплата звёздами Telegram: ссылку на счёт выдаёт бот (createInvoiceLink), а платёжный лист
+// показывает клиент — в WebView это единственный работающий способ, обычный переход по
+// ссылке там игнорируется. false означает, что оплатить в этом окружении нельзя (браузер
+// или старый клиент): интерфейс тогда предлагает бота, где те же счета приходят сообщением.
+export function openInvoice(url: string, onStatus: (status: string) => void): boolean {
+  const app = getTelegramWebApp()
+  if (!insideTelegramWebView() || !app?.openInvoice) return false
+  app.openInvoice(url, onStatus)
+  return true
 }

@@ -12,6 +12,7 @@ import {
   isTelegramEnvironment,
   openBotChat,
   openExternalLink,
+  openInvoice,
   TELEGRAM_BOT_URL,
   type TelegramWebApp,
 } from './webapp'
@@ -198,5 +199,37 @@ describe('openBotChat', () => {
 
     expect(openBotChat('https://t.me/other_bot')).toBe('telegram')
     expect(openTelegramLink).toHaveBeenCalledWith('https://t.me/other_bot')
+  })
+})
+
+// Оплата звёздами: ссылку на счёт выдаёт бот, а платёжный лист показывает клиент Telegram.
+describe('openInvoice', () => {
+  it('в мини-приложении открывает счёт и передаёт статус оплаты', () => {
+    const urls: string[] = []
+    stubWindow({
+      initData: 'query_id=1',
+      platform: 'android',
+      openInvoice: (url, callback) => {
+        urls.push(url)
+        callback?.('paid')
+      },
+    })
+
+    const statuses: string[] = []
+    const opened = openInvoice('https://t.me/$invoice', (status) => statuses.push(status))
+
+    expect(opened).toBe(true)
+    expect(urls).toEqual(['https://t.me/$invoice'])
+    expect(statuses).toEqual(['paid'])
+  })
+
+  it('в браузере оплата недоступна: открыть счёт нечем', () => {
+    vi.stubGlobal('window', {})
+    expect(openInvoice('https://t.me/$invoice', () => undefined)).toBe(false)
+  })
+
+  it('в старом клиенте без openInvoice оплата тоже недоступна', () => {
+    stubWindow({ initData: 'query_id=1', platform: 'android' })
+    expect(openInvoice('https://t.me/$invoice', () => undefined)).toBe(false)
   })
 })

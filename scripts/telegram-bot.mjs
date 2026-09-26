@@ -19,6 +19,12 @@
 // К каждому ответу бот добавляет кнопки со ссылками проекта: GitHub (исходный код), лендинг
 // и группу SelfCRM для вопросов — в /help те же адреса перечислены текстом.
 //
+// Ещё бот принимает поддержку проекта звёздами Telegram: /support присылает счета на
+// 50/100/250/500 ⭐, оплату подтверждает pre_checkout_query (ответ за 10 секунд), а о
+// полученных звёздах пишет в лог `telegram_payment_charge_id` — он нужен для возврата.
+// Ссылки на те же счета открывает плашка «Поддержите разработку» в мини-приложении;
+// печатает их `npm run bot -- --star-links` (готовый блок для src/utils/support.ts).
+//
 // Кнопка меню ставится в двух местах: как общая (по умолчанию, для всех пользователей) и
 // у конкретного чата — сразу после первого сообщения боту. Так кнопка появляется даже там,
 // где Telegram не применил общую настройку (см. menuButtonHint).
@@ -58,6 +64,7 @@ const USAGE = `Бот-лаунчер SelfCRM.
   --webapp-url <url>    адрес Mini App (по умолчанию ${DEFAULT_WEBAPP_URL})
   --chat <id>           задать кнопку меню для чата (можно повторять: --chat 123 --chat 456)
   --whatsnew            показать текст «что нового» и выйти (ничего не отправляется)
+  --star-links          создать ссылки на оплату звёздами и напечатать для src/utils/support.ts
   --help                эта справка
 
 Окружение:
@@ -66,13 +73,31 @@ const USAGE = `Бот-лаунчер SelfCRM.
 
 const MENU_BUTTON_TEXT = 'Открыть SelfCRM'
 
+// Поддержка проекта: суммы в звёздах Telegram. Значения совпадают с SUPPORT_AMOUNTS
+// в src/utils/support.ts — там же лежат ссылки, которые создаёт --star-links.
+const SUPPORT_AMOUNTS = [50, 100, 250, 500]
+
+// Что за товар продаём: так подписаны счёт и платёжный лист.
+const SUPPORT_TITLE = 'Поддержка SelfCRM'
+const SUPPORT_DESCRIPTION = 'Поддержать разработку SelfCRM'
+// Одна и та же строка payload у всех счетов: по ней видно, что платёж — поддержка.
+const SUPPORT_PAYLOAD = 'selfcrm-support'
+
 function parseArgs(argv) {
-  const args = { setup: false, help: false, whatsnew: false, webappUrl: null, chats: [] }
+  const args = {
+    setup: false,
+    help: false,
+    whatsnew: false,
+    starLinks: false,
+    webappUrl: null,
+    chats: [],
+  }
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === '--setup') args.setup = true
     else if (arg === '--help' || arg === '-h') args.help = true
     else if (arg === '--whatsnew') args.whatsnew = true
+    else if (arg === '--star-links') args.starLinks = true
     else if (arg === '--webapp-url') args.webappUrl = argv[++i] ?? null
     else if (arg === '--chat') {
       const chatId = Number(argv[++i])
@@ -223,6 +248,117 @@ async function sendWhatsnew(chatId, token, url) {
   }
 }
 
+// ----- Поддержка проекта звёздами Telegram -----
+//
+// Приём платежей устроен по документации Telegram: бот продаёт цифровые товары, а значит
+// оплата идёт только звёздами (currency XTR). Порядок такой:
+//   1. ссылку на счёт создаёт `createInvoiceLink`; из неё платёжный лист открывает клиент
+//      (в мини-приложении это WebApp.openInvoice, см. src/utils/support.ts);
+//   2. перед оплатой приходит `pre_checkout_query` — ответить нужно за 10 секунд
+//      (`answerPreCheckoutQuery`), иначе платёж не пройдёт;
+//   3. после оплаты приходит `successful_payment` — за него благодарим и пишем в лог
+//      `telegram_payment_charge_id`: только с ним можно вернуть звёзды.
+//
+// Пока процесс бота не запущен, подтверждать платежи некому — поэтому поддержка работает
+// тогда, когда запущен `npm run bot` (как и остальные ответы бота).
+const SUPPORT_EMAIL = 'doc9830@proton.me'
+
+// Ссылки на счета создаются один раз за запуск и живут в памяти: `createInvoiceLink`
+// вызывается на сумму, а не на каждое нажатие. Ссылки постоянные — открывать их можно
+// многократно, каждый платёж приходит отдельным `successful_payment`.
+let starLinksCache = null
+
+async function starLinks(token) {
+  if (starLinksCache) return starLinksCache
+  const links = {}
+  for (const amount of SUPPORT_AMOUNTS) {
+    links[amount] = await call(
+      'createInvoiceLink',
+      {
+        title: SUPPORT_TITLE,
+        description: `${SUPPORT_DESCRIPTION}: ${amount} ⭐`,
+        payload: `${SUPPORT_PAYLOAD}-${amount}`,
+        currency: 'XTR',
+        prices: [{ label: SUPPORT_TITLE, amount }],
+      },
+      token,
+    )
+  }
+  starLinksCache = links
+  return links
+}
+
+// Текст поддержки: суммы выводятся кнопками — за каждой кнопкой ссылка на счёт.
+function supportMessage() {
+  return [
+    '❤️ Поддержать SelfCRM',
+    '',
+    'SelfCRM бесплатный и без ограничений. Поддержка помогает проекту жить:',
+    'исправлять ошибки, добавлять возможности и держать приложение в порядке.',
+    '',
+    'Оплата — звёздами Telegram, разово, без подписки. Выберите сумму:',
+  ].join('\n')
+}
+
+function supportKeyboard(links) {
+  return {
+    inline_keyboard: [SUPPORT_AMOUNTS.map((amount) => ({ text: `${amount} ⭐`, url: links[amount] }))],
+  }
+}
+
+async function sendSupport(chatId, token) {
+  const links = await starLinks(token)
+  await call(
+    'sendMessage',
+    { chat_id: chatId, text: supportMessage(), reply_markup: supportKeyboard(links) },
+    token,
+  )
+}
+
+// /paysupport — обязательная команда для ботов, которые продают цифровые товары: по ней
+// пользователь должен понять, как получить помощь и возврат.
+function paysupportMessage() {
+  return [
+    'Оплата и возврат',
+    '',
+    'Поддержка проекта идёт звёздами Telegram. Чек об оплате остаётся в самом Telegram:',
+    '«Настройки → Мои звёзды → История платежей».',
+    '',
+    'Если платёж прошёл, а что-то не работает, или нужен возврат — напишите на',
+    `${SUPPORT_EMAIL} и укажите дату платежа: вернём звёзды (refundStarPayment).`,
+  ].join('\n')
+}
+
+// Подтверждение оплаты: ответ отправляется сразу и без лишних запросов — на ответ
+// Telegram даёт 10 секунд, иначе платёж отменяется.
+async function onPreCheckout(query, token) {
+  await call('answerPreCheckoutQuery', { pre_checkout_query_id: query.id, ok: true }, token)
+  console.log(
+    `Оплата подтверждена: ${query.invoice_payload}, ${query.total_amount} ⭐ (пользователь ${query.from?.id ?? '—'})`,
+  )
+}
+
+// Полученная оплата: благодарим и пишем в лог charge_id — он нужен для возврата звёзд.
+async function onPaid(message, token, url) {
+  const payment = message.successful_payment
+  console.log(
+    `Оплата получена: ${payment.invoice_payload}, ${payment.total_amount} ⭐, charge ${payment.telegram_payment_charge_id}`,
+  )
+  await call(
+    'sendMessage',
+    {
+      chat_id: message.chat.id,
+      text: [
+        'Спасибо! ❤️',
+        '',
+        'Звёзды пришли — поддержка засчитана. Вопросы по оплате: /paysupport.',
+      ].join('\n'),
+      reply_markup: keyboard(url),
+    },
+    token,
+  )
+}
+
 // Тексты бота: обычный SelfCRM, который просто открывается внутри Telegram.
 // Ссылки дублируются кнопками (keyboard), поэтому в тексте они не перечисляются.
 function startMessage() {
@@ -247,6 +383,8 @@ function helpMessage(url) {
     '',
     'Команды бота:',
     '/whatsnew — что нового в последней версии;',
+    '/support — поддержать разработку звёздами Telegram;',
+    '/paysupport — помощь и возврат по оплате;',
     '/help — эта справка.',
     '',
     'Внутри приложения:',
@@ -267,6 +405,8 @@ function helpMessage(url) {
     `• GitHub — исходный код: ${GITHUB_URL}`,
     `• Лендинг — возможности и установка: ${LANDING_URL}`,
     `• Группа SelfCRM — вопросы и обсуждения: ${GROUP_URL}`,
+    '',
+    'Поддержать проект: /support — разовая оплата звёздами Telegram, без подписки.',
     '',
     `Адрес Mini App: ${url}`,
   ].join('\n')
@@ -301,8 +441,22 @@ function keyboard(url) {
 }
 
 async function onUpdate(update, token, url) {
+  // Подтверждение оплаты приходит отдельным обновлением, а не сообщением: ответить на него
+  // нужно за 10 секунд, поэтому оно обрабатывается раньше всего остального.
+  if (update.pre_checkout_query) {
+    await onPreCheckout(update.pre_checkout_query, token)
+    return
+  }
+
   const message = update.message
   if (!message) return
+
+  // Успешная оплата — тоже сообщение, но без текста: только поле successful_payment.
+  if (message.successful_payment) {
+    await onPaid(message, token, url)
+    return
+  }
+
   const text = (message.text ?? '').trim()
   const command = text.split(/\s+/)[0].split('@')[0].toLowerCase()
 
@@ -310,6 +464,26 @@ async function onUpdate(update, token, url) {
     await call(
       'sendMessage',
       { chat_id: message.chat.id, text: startMessage(), reply_markup: keyboard(url) },
+      token,
+    )
+    // Ссылка из плашки поддержки в приложении ведёт сюда: /start support → сразу счёт.
+    if (text.split(/\s+/)[1]?.toLowerCase() === 'support') {
+      await sendSupport(message.chat.id, token)
+    }
+    return
+  }
+
+  // Поддержка проекта: суммы звёздами кнопками, каждая кнопка — ссылка на счёт.
+  if (command === '/support') {
+    await sendSupport(message.chat.id, token)
+    return
+  }
+
+  // Обязательная команда для ботов с цифровыми товарами: помощь и возврат по оплате.
+  if (command === '/paysupport') {
+    await call(
+      'sendMessage',
+      { chat_id: message.chat.id, text: paysupportMessage(), reply_markup: keyboard(url) },
       token,
     )
     return
@@ -393,6 +567,8 @@ async function setup(token, url, chats) {
       commands: [
         { command: 'start', description: 'Открыть SelfCRM' },
         { command: 'whatsnew', description: 'Что нового в SelfCRM' },
+        { command: 'support', description: 'Поддержать разработку' },
+        { command: 'paysupport', description: 'Помощь и возврат по оплате' },
         { command: 'help', description: 'Справка' },
       ],
     },
@@ -434,7 +610,9 @@ async function runPolling(token, url) {
     let updates
     try {
       updates = await withSignal(
-        call('getUpdates', { offset, timeout: 30, allowed_updates: ['message'] }, token),
+        // pre_checkout_query — подтверждение оплаты звёздами: без него платёж не пройдёт,
+        // а сообщение о нём приходит не как message, поэтому запрашиваем оба вида.
+        call('getUpdates', { offset, timeout: 30, allowed_updates: ['message', 'pre_checkout_query'] }, token),
         controller.signal,
       )
     } catch (e) {
@@ -481,6 +659,18 @@ async function main() {
   // Предпросмотр текста «что нового»: ни токена, ни обращения к Telegram — только GitHub.
   if (args.whatsnew) {
     console.log(whatsnewMessage(await latestRelease()))
+    return
+  }
+
+  // Ссылки на оплату звёздами: их выдаёт Telegram, а живут они в src/utils/support.ts —
+  // команда печатает готовый блок, который остаётся вставить в файл.
+  if (args.starLinks) {
+    const links = await starLinks(resolveToken())
+    console.log('Созданы ссылки на счета — вставьте в src/utils/support.ts:')
+    console.log('')
+    console.log('export const SUPPORT_INVOICE_LINKS: Record<SupportAmount, string> = {')
+    for (const amount of SUPPORT_AMOUNTS) console.log(`  ${amount}: '${links[amount]}',`)
+    console.log('}')
     return
   }
 

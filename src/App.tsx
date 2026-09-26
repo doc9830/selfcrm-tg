@@ -1,4 +1,5 @@
 import { Layout } from './components/Layout'
+import { SupportBanner } from './components/SupportBanner'
 import { SystemBack } from './components/SystemBack'
 import { TelegramShell } from './components/TelegramShell'
 import { UpdateToast } from './components/UpdateToast'
@@ -24,6 +25,9 @@ export function App() {
       {renderScreen()}
       <SystemBack />
       <TelegramShell />
+      {/* Плашка «Поддержите разработку»: показывается только на главном экране и по
+          правилам из utils/support.ts (см. SupportBanner). */}
+      <SupportBanner />
       <UpdateToast />
     </>
   )

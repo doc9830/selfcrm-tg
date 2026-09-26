@@ -1909,6 +1909,104 @@ button {
   color: var(--text-muted);
 }
 
+/* ---- Плашка «Поддержите разработку» ---- */
+
+/* Это не модальное окно, а полоса над нижним меню на главном экране: CRM остаётся
+   полностью рабочей. Пока плашка видна, SupportBanner ставит на <body> класс
+   support-visible — по нему у контента появляется запас снизу, поэтому плашка ничего
+   не перекрывает. */
+.support-banner {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--nav-h) + var(--safe-bottom) + 8px);
+  transform: translateX(-50%);
+  width: min(528px, calc(100% - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.18);
+  z-index: 40;
+  animation: support-banner-in 0.24s ease-out;
+}
+
+@keyframes support-banner-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.support-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.support-banner-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.support-banner-pay {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 10px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.support-banner-pay:active {
+  background: var(--primary-strong);
+}
+
+.support-banner-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.support-banner-close:active {
+  background: var(--bg);
+}
+
+.support-amounts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.support-banner-hint {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+/* Запас снизу, пока плашка на экране: она висит над меню, а не поверх карточек. */
+body.support-visible .app-main {
+  padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + 132px);
+}
+
 /* ---- Уведомление о новой версии ---- */
 
 .update-toast {
@@ -2178,6 +2276,7 @@ button {
 
   .app-header,
   .app-nav,
+  .support-banner,
   .receipt-actions,
   .receipt .field-hint,
   .receipt .field-error {
