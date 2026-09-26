@@ -137,6 +137,35 @@ describe('GET /files/<id> — отдача файла', () => {
     expect(response.status).toBe(404)
   })
 
+  it('имя файла в адресе не мешает отдаче', async () => {
+    const store = stubStore()
+    const uploaded = (await handleFiles(
+      uploadRequest(bytes('xlsx-bytes'), { 'X-File-Name': encodeURIComponent('SelfCRM_Отчет.xlsx') }),
+      { REPORT_FILES: store },
+    )) as Response
+    const { id } = (await uploaded.json()) as { id: string }
+
+    // Такой адрес собирает Worker, когда готовит сообщение «Поделиться»: последним куском стоит
+    // имя файла, по нему Telegram называет документ в чате. Отдаётся то же, что и без имени.
+    const response = (await handleFiles(
+      new Request(
+        `https://selfcrm-bot.example.workers.dev${FILES_PATH}/${id}/${encodeURIComponent('SelfCRM_Отчет.xlsx')}`,
+      ),
+      { REPORT_FILES: store },
+    )) as Response
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('xlsx-bytes')
+  })
+
+  it('имя в адресе не открывает чужой файл', async () => {
+    const response = (await handleFiles(
+      new Request(`https://selfcrm-bot.example.workers.dev${FILES_PATH}/секрет/имя.xlsx`),
+      env(),
+    )) as Response
+    expect(response.status).toBe(404)
+  })
+
   it('истёкший файл не отдаёт', async () => {
     const store = stubStore()
     const uploaded = (await handleFiles(uploadRequest(bytes('x')), {

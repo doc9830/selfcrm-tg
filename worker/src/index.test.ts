@@ -15,6 +15,10 @@ const env: Env = {
   WEBAPP_URL: 'https://example.test/app/',
 }
 
+// Адрес, по которому в тестах отвечает Worker: отдельной константой, потому что он нужен и
+// запросам webhook, и запросам файлов.
+const WEBHOOK_ORIGIN = 'https://selfcrm-bot.example.workers.dev'
+
 const startUpdate = {
   update_id: 1001,
   message: { chat: { id: 42, type: 'private' }, text: '/start' },
@@ -65,7 +69,7 @@ function stubFetch(
 }
 
 function webhookRequest(body: unknown, secret?: string, method = 'POST') {
-  return new Request(`https://selfcrm-bot.example.workers.dev${WEBHOOK_PATH}`, {
+  return new Request(`${WEBHOOK_ORIGIN}${WEBHOOK_PATH}`, {
     method,
     headers: secret === undefined ? {} : { 'X-Telegram-Bot-Api-Secret-Token': secret },
     body: method === 'POST' ? JSON.stringify(body) : undefined,
@@ -131,7 +135,7 @@ describe('POST /telegram/webhook', () => {
     stubFetch(log)
 
     const response = await worker.fetch(
-      new Request(`https://selfcrm-bot.example.workers.dev${WEBHOOK_PATH}`, {
+      new Request(`${WEBHOOK_ORIGIN}${WEBHOOK_PATH}`, {
         method: 'POST',
         headers: { 'X-Telegram-Bot-Api-Secret-Token': 'test-secret' },
         body: '{не json',
@@ -204,7 +208,7 @@ describe('неподдерживаемое обновление', () => {
 describe('прочие адреса', () => {
   it('на неизвестный путь отвечает 404', async () => {
     const response = await worker.fetch(
-      new Request('https://selfcrm-bot.example.workers.dev/чужой-путь', { method: 'POST' }),
+      new Request(`${WEBHOOK_ORIGIN}/чужой-путь`, { method: 'POST' }),
       env,
     )
     expect(response.status).toBe(404)
@@ -212,11 +216,44 @@ describe('прочие адреса', () => {
 
   it('GET / отвечает 200 — проверка, что Worker развёрнут', async () => {
     const response = await worker.fetch(
-      new Request('https://selfcrm-bot.example.workers.dev/'),
+      new Request(`${WEBHOOK_ORIGIN}/`),
       env,
     )
     expect(response.status).toBe(200)
     expect(await response.text()).toContain('works')
+  })
+})
+
+describe('POST /files/<id>/share', () => {
+  it('доходит до слоя «Поделиться», а не до слоя файлов: без подписи — 403', async () => {
+    // Путь начинается так же, как у файлов, поэтому важно, что запрос перехватывает именно
+    // слой «Поделиться»: слой файлов ответил бы 404, и кнопка в мини-приложении не работала бы.
+    const log: string[] = []
+    stubFetch(log)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const withStore: Env = {
+      ...env,
+      REPORT_FILES: {
+        async put() {},
+        async get() {
+          return null
+        },
+        async delete() {},
+      },
+    }
+
+    const response = await worker.fetch(
+      new Request(`${WEBHOOK_ORIGIN}/files/${'a'.repeat(22)}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initData: 'мусор' }),
+      }),
+      withStore,
+    )
+
+    expect(response.status).toBe(403)
+    // Bot API не вызывается вовсе: неподписанный запрос дальше не идёт.
+    expect(log).toEqual([])
   })
 })
 

@@ -13,6 +13,7 @@ import {
   openBotChat,
   openExternalLink,
   openInvoice,
+  shareTelegramMessage,
   TELEGRAM_BOT_URL,
   type TelegramWebApp,
 } from './webapp'
@@ -203,6 +204,73 @@ describe('openBotChat', () => {
 })
 
 // Оплата звёздами: ссылку на счёт выдаёт бот, а платёжный лист показывает клиент Telegram.
+describe('shareMessage', () => {
+  it('вне клиента Telegram делиться нечем', async () => {
+    vi.stubGlobal('window', {})
+    expect(await shareTelegramMessage('prepared-1')).toBe('unsupported')
+
+    // Клиент назвал себя, но метода отправки у него нет (старая версия).
+    stubWindow({ initData: 'query_id=1', platform: 'ios' })
+    expect(await shareTelegramMessage('prepared-1')).toBe('unsupported')
+  })
+
+  it('пустой идентификатор сообщения не открывает меню', async () => {
+    const shared: string[] = []
+    stubWindow({
+      initData: 'query_id=1',
+      platform: 'android',
+      shareMessage: (msgId) => void shared.push(msgId),
+    })
+
+    expect(await shareTelegramMessage('  ')).toBe('failed')
+    expect(shared).toEqual([])
+  })
+
+  it('клиент отказал на вызове — исход сообщается текстом', async () => {
+    stubWindow({
+      initData: 'query_id=1',
+      platform: 'android',
+      shareMessage: () => {
+        throw new Error('клиент не дал открыть меню')
+      },
+    })
+
+    expect(await shareTelegramMessage('prepared-1')).toBe('failed')
+  })
+
+  it('клиент молчит: ожидание заканчивается исходом, а не зависанием', async () => {
+    vi.useFakeTimers()
+    try {
+      stubWindow({
+        initData: 'query_id=1',
+        platform: 'android',
+        // Ни callback, ни события: так ведёт себя клиент, у которого меню не открылось.
+        shareMessage: () => {},
+      })
+
+      const promise = shareTelegramMessage('prepared-1', { timeoutMs: 1000, settleMs: 10 })
+      await vi.advanceTimersByTimeAsync(1500)
+
+      expect(await promise).toBe('failed')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('событие клиента превращается в понятный исход', async () => {
+    const handlers = new Map<string, (payload?: { error?: string }) => void>()
+    stubWindow({
+      initData: 'query_id=1',
+      platform: 'android',
+      onEvent: (event, handler) => handlers.set(event, handler),
+      offEvent: (event) => handlers.delete(event),
+      shareMessage: () => handlers.get('shareMessageFailed')?.({ error: 'USER_DECLINED' }),
+    })
+
+    expect(await shareTelegramMessage('prepared-1')).toBe('cancelled')
+  })
+})
+
 describe('openInvoice', () => {
   it('в мини-приложении открывает счёт и передаёт статус оплаты', () => {
     const urls: string[] = []

@@ -9,6 +9,7 @@
 // Роуты:
 //   POST /telegram/webhook — обновления Telegram (проверка X-Telegram-Bot-Api-Secret-Token);
 //   POST /files            — временный файл (отчёт из мини-приложения) → ссылка на скачивание;
+//   POST /files/<id>/share — «Поделиться»: сообщение с файлом для выбора чата (worker/src/share.ts);
 //   GET  /files/<id>       — скачивание временного файла (worker/src/files.ts);
 //   GET  /                 — проверка, что Worker развёрнут (текст, без секретов).
 //
@@ -29,6 +30,7 @@
 import { WEBHOOK_PATH } from './config'
 import { handleFiles } from './files'
 import { handleUpdate, type TelegramUpdate } from './handler'
+import { handleReportShare } from './share'
 import type { Deps, Env } from './telegram'
 import { scrub } from './telegram'
 
@@ -38,6 +40,16 @@ const SECRET_HEADER = 'X-Telegram-Bot-Api-Secret-Token'
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
+
+    // Зависимости, подменяемые в тестах: только сеть. Нужны и файлам («Поделиться»
+    // вызывает Bot API), и обновлениям Telegram, поэтому объявлены сразу.
+    const deps: Deps = { fetch: globalThis.fetch.bind(globalThis) }
+
+    // «Поделиться» (POST /files/<id>/share) идёт раньше файлов: адрес начинается так же,
+    // как у них, а слой файлов на такой запрос отвечает 404. null означает «адрес не наш» —
+    // тогда работают файлы и роуты бота ниже.
+    const share = await handleReportShare(request, env, deps)
+    if (share) return share
 
     // Временные файлы (отчёт в Excel из мини-приложения): отдельный слой, который
     // ничего не знает про Telegram. null означает «адрес не наш» — тогда работают
@@ -78,7 +90,6 @@ export default {
       return new Response('Bad request\n', { status: 400 })
     }
 
-    const deps: Deps = { fetch: globalThis.fetch.bind(globalThis) }
     try {
       await handleUpdate(update, env, deps)
     } catch (e) {

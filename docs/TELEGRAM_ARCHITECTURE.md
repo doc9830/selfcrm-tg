@@ -51,10 +51,10 @@
 
 | Файл                               | Ответственность                                                                 |
 | ---------------------------------- | ------------------------------------------------------------------------------- |
-| `src/telegram/webapp.ts`           | Типы WebApp API и null-safe доступ: `getTelegramWebApp()`, `isTelegramEnvironment()`, `insideTelegramWebView()`, `openExternalLink()` / `openBotChat()`, `openInvoice()` (оплата звёздами: платёжный лист клиента и статус `paid`/`cancelled`/`failed`), `TELEGRAM_BOT_URL`, `getTelegramUserId()`, `getTelegramUserLabel()` |
+| `src/telegram/webapp.ts`           | Типы WebApp API и null-safe доступ: `getTelegramWebApp()`, `isTelegramEnvironment()`, `insideTelegramWebView()`, `openExternalLink()` / `openBotChat()`, `openInvoice()` (оплата звёздами: платёжный лист клиента и статус `paid`/`cancelled`/`failed`), `downloadTelegramFile()` (Bot API 8.0+), `shareTelegramMessage()` («Поделиться»: родное меню выбора чата, Bot API 8.0+, раздел 13), `TELEGRAM_BOT_URL`, `getTelegramUserId()`, `getTelegramUserLabel()` |
 | `src/telegram/environment.ts`      | `initTelegramEnvironment()` (`ready()`, `expand()`, слежение за `viewportChanged`, переменные `--tg-height` / `--tg-stable-height`), `syncTelegramChrome()`, `telegramColorScheme()`, `setTelegramBackButtonVisible()`, `onTelegramBackButton()`, `onTelegramThemeChange()` |
 | `src/telegram/cloudStorage.ts`     | Промисная обёртка над `WebApp.CloudStorage` (Bot API 6.9+): `cloudStorageSupported()`, `cloudStorageAvailability()` (почему облака нет: `ready`, `old-client`, `outside-telegram`), `cloudSetItem()`, `cloudGetItem()`, `cloudGetItems()`, `cloudRemoveItems()`, `cloudGetKeys()`; коды ошибок клиента переводятся в понятный текст |
-| `src/telegram/files.ts`            | Отчёт в Excel: `uploadReportFile()` кладёт файл в хранилище Worker'а (`POST /files`) и получает временную ссылку, `reportFileBridge` отдаёт её клиенту (`downloadFile` → `openLink` → буфер обмена), `registerTelegramReportFiles()` ставит мост в `src/main.tsx` только внутри Telegram (раздел 13) |
+| `src/telegram/files.ts`            | Отчёт в Excel: `uploadReportFile()` кладёт файл в хранилище Worker'а (`POST /files`) и получает временную ссылку с идентификатором, `reportFileBridge` отдаёт её клиенту (`downloadFile` → `openLink` → буфер обмена), путь `share` готовит сообщение (`POST /files/<id>/share`) и открывает меню выбора чата (`shareMessage` → иначе ссылка `t.me/share/url`), `registerTelegramReportFiles()` ставит мост в `src/main.tsx` только внутри Telegram (раздел 13) |
 | `src/components/TelegramShell.tsx` | React-мост: вызывает функции выше и связывает события Telegram с роутером (`backTarget`) и темой (`applyTelegramScheme`). Ничего не рендерит |
 | `index.html`                       | Подключение официального `telegram-web-app.js`, CSP, тема до первой отрисовки    |
 | `src/index.css`                    | `--safe-top` / `--safe-bottom` (safe area Telegram → `env(safe-area-inset-*)`), высота окна |
@@ -66,8 +66,10 @@
 | `src/components/SupportBanner.tsx` | Плашка на главном экране: суммы, оплата через `openInvoice`, «×» и благодарность |
 | `scripts/telegram-bot.mjs`         | Утилиты бота: `--setup` (команды `/start`, `/help`, `/whatsnew`, `/support`, `/paysupport`, общая кнопка меню, `--chat <id>` — для чата), `--whatsnew` — предпросмотр текста, `--star-links` — создание ссылок на счета. Long polling удалён: обновления принимает Worker |
 | `scripts/set-webhook.mjs`          | Webhook бота: `--set` (удаляет прежний webhook и ставит новый на адрес Worker), `--info` (`getWebhookInfo`), `--delete`, `--sync-secrets` (залив `BOT_TOKEN` и `WEBHOOK_SECRET` в Cloudflare) |
-| `worker/src/index.ts`              | Вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (при несовпадении — 403), ответ Telegram — HTTP 200, если обновление обработано, и 500, если обработка упала (Telegram повторит доставку); маршруты файлов `POST /files` и `GET /files/<id>` (раздел 13); `GET /` — проверка развёртывания |
-| `worker/src/files.ts`              | Временные файлы: приём (`POST /files` → `{ id, url, expiresIn }`), отдача вложением (`GET /files/<id>`), KV с истечением срока, CORS для адреса Pages, очистка имени и типа (раздел 13) |
+| `worker/src/index.ts`              | Вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (при несовпадении — 403), ответ Telegram — HTTP 200, если обновление обработано, и 500, если обработка упала (Telegram повторит доставку); маршруты файлов `POST /files` и `GET /files/<id>`, «Поделиться» `POST /files/<id>/share` (раздел 13); `GET /` — проверка развёртывания |
+| `worker/src/files.ts`              | Временные файлы: приём (`POST /files` → `{ id, url, expiresIn }`), отдача вложением (`GET /files/<id>`), KV с истечением срока (`storeFile()` / `readStoredFile()` — ими же пользуется «Поделиться»), CORS для адреса Pages, очистка имени и типа (раздел 13) |
+| `worker/src/share.ts`              | «Поделиться»: `POST /files/<id>/share` — проверяет подпись `initData`, копирует файл со свежим сроком и собирает сообщение ботом (`savePreparedInlineMessage` → `{ preparedMessageId }`), которое клиент отправляет через `WebApp.shareMessage` (раздел 13) |
+| `worker/src/webappAuth.ts`         | Подпись данных мини-приложения: `verifyInitData()` — HMAC-схема Telegram (`secret_key` из `BOT_TOKEN`), проверка срока и разбор пользователя; без неё Worker не знал бы, что запрос пришёл из настоящего мини-приложения (раздел 13) |
 | `worker/src/handler.ts`            | Обработка обновлений: команды, документы, платежи; `pre_checkout_query` подтверждается первым делом и без лишних запросов. Ставит кнопку меню в личном чате |
 | `worker/src/messages.ts`           | Тексты и кнопки бота — перенесены из `scripts/telegram-bot.mjs` без изменений |
 | `worker/src/telegram.ts`           | Вызовы Bot API (`telegram()`), `webAppUrl()`, `scrub()` — токен не попадает в логи и в тексты ошибок |
@@ -399,26 +401,62 @@ Telegram → POST https://selfcrm-bot.<поддомен>.workers.dev/telegram/we
   secret put` применяется несколько секунд, и Telegram успел постучаться в версию ещё без
   секрета; Telegram повторяет доставку сам, а счётчик очереди после успеха обнуляется.
 
-## 13. Отчёт в Excel: временная ссылка
+## 13. Отчёт в Excel: временная ссылка и «Поделиться»
 
-Кнопка **«Экспорт в Excel»** на экране статистики собирает `.xlsx` в самом мини-приложении
-(данные никуда не уходят) — но отдать файл странице нечем: WebView клиента Telegram игнорирует и
-blob-ссылки, и `<a download>`, а `WebApp.downloadFile` принимает только адреса `https:`. Чек
-решает это иначе: его данные целиком помещаются в адрес страницы (`#/receipt?d=…`, раздел про
-PDF-чек). Отчёт в адрес не поместить — в нём все заказы, позиции, клиенты и товары, — поэтому
-файл на час ложится в хранилище того же Worker'а, что обслуживает бота:
+Кнопки **«Экспорт в Excel»** и **«Поделиться»** на экране статистики собирают один и тот же
+`.xlsx` в самом мини-приложении (данные никуда не уходят) — но отдать файл странице нечем: WebView
+клиента Telegram игнорирует и blob-ссылки, и `<a download>`, а `WebApp.downloadFile` принимает
+только адреса `https:`. Чек решает это иначе: его данные целиком помещаются в адрес страницы
+(`#/receipt?d=…`, раздел про PDF-чек). Отчёт в адрес не поместить — в нём все заказы, позиции,
+клиенты и товары, — поэтому файл на час ложится в хранилище того же Worker'а, что обслуживает бота:
 
 ```text
 SelfCRM (мини-приложение) → POST /files (тело — файл, заголовок X-File-Name)
       ↓ { id, url, expiresIn }
+«Экспорт в Excel»:
 WebApp.downloadFile(url) — клиент сохраняет файл в «Загрузки» (Bot API 8.0+)
    ↳ иначе openLink(url) — файл скачает встроенный браузер клиента
    ↳ иначе ссылка в буфер обмена (под кнопкой появляется текст об этом)
+«Поделиться»:
+POST /files/<id>/share (тело — initData и подпись сообщения) → savePreparedInlineMessage
+      ↓ { preparedMessageId, url, expiresIn }
+WebApp.shareMessage(preparedMessageId) — родное меню клиента: выбор чата, файл уходит документом
+   ↳ иначе openTelegramLink(t.me/share/url) — выбор чата по ссылке (уходит ссылка, а не файл)
 ```
 
 - **Адреса.** `POST /files` — приём (ответ `{ id, url, expiresIn }`), `GET /files/<id>` — отдача
-  вложением, `OPTIONS /files` — предзапрос браузера: Mini App живёт на GitHub Pages, то есть на
-  другом домене, поэтому Worker отвечает заголовками CORS.
+  вложением, `POST /files/<id>/share` — подготовка сообщения «Поделиться», `OPTIONS` — предзапрос
+  браузера: Mini App живёт на GitHub Pages, то есть на другом домене, поэтому Worker отвечает
+  заголовками CORS. Путь «Поделиться» начинается так же, как у файлов, поэтому в
+  `worker/src/index.ts` он разбирается раньше: слой файлов на такой запрос отвечает `404`.
+- **«Поделиться»: файл документом в чат.** Кнопка открывает родное меню клиента
+  (`WebApp.shareMessage`, Bot API 8.0+) — то же, что при пересылке сообщения. Сообщение для него
+  собирает **бот** (`savePreparedInlineMessage`): клиент принимает только готовый идентификатор, а
+  в вызове нужен токен бота, которого на клиенте нет. Поэтому Worker по адресу
+  `/files/<id>/share` берёт файл из хранилища, копирует его с новым сроком (`storeFile` — у
+  исходной ссылки срок мог уже наполовину выйти) и просит Bot API подготовить сообщение с
+  документом. Ничего никому не отправляется: пока пользователь не выберет чат, сообщения не
+  существует.
+- **Чем это защищено.** Адрес публичный, токена в запросе нет, поэтому тело запроса проверяется по
+  подписи `initData` (`worker/src/webappAuth.ts`): `secret_key = HMAC_SHA256("WebAppData",
+  BOT_TOKEN)`, затем `HMAC_SHA256(secret_key, data_check_string)` против поля `hash`, плюс срок
+  `auth_date` (час) и разбор пользователя из поля `user`. Оттуда же берётся `user_id` — сообщение
+  получит только тот, кто его попросил. Без подписи — `403` и ни одного вызова Bot API; отказ
+  Bot API или отсутствие токена (`503`) не ломают кнопку: приложение уходит на запасной путь.
+- **Тип документа — только PDF или ZIP.** Документ в подготовленном сообщении Telegram принимает
+  лишь двух типов (`InlineQueryResultDocument` в документации Bot API: «either application/pdf or
+  application/zip»). Это проверено живым вызовом: с типом отчёта (`…spreadsheetml.sheet`) Bot API
+  отвечает `Bad Request: unallowed document MIME type`, а с `application/zip` — идёт дальше по
+  проверкам. Уловки в этом нет: `.xlsx` — это zip-контейнер, байты файла отдаются те же, имя
+  файла стоит последним куском адреса (`/files/<id>/SelfCRM_Отчет_….xlsx`) — по нему Telegram
+  называет документ, — и дублируется в `Content-Disposition`, поэтому получатель открывает отчёт в
+  Excel. Если клиент всё же не сможет отправить документ (`MESSAGE_SEND_FAILED`), приложение уйдёт
+  на запасной путь ссылкой.
+- **Запасные пути «Поделиться».** Нет `shareMessage` (старый клиент) или меню отказало —
+  открывается выбор чата ссылкой `t.me/share/url` (тот же путь, что у чека: уходит ссылка на файл,
+  а не файл). Не подготовилось сообщение — ссылка берётся из ответа на выгрузку. Ни то, ни другое
+  — под кнопкой появляется текст: «ничего не произошло» быть не должно. Исходы различаются словами:
+  отправлено, ушла ссылка, отправка отменена, сообщение устарело, поделиться нечем, повторите.
 - **Хранение.** Workers KV, привязка `REPORT_FILES` в `wrangler.toml`, две записи на файл: сам
   файл и его подпись (имя и тип). Срок — `expirationTtl` в час, удаляет хранилище само; имена
   постоянных ссылок не существует. Идентификатор — 16 случайных байт в base64url (22 символа),

@@ -7,6 +7,7 @@ import { money, plural } from '../utils/format'
 import { statisticsPeriodFromQuery } from '../utils/links'
 import { clientLabel, NO_CLIENT_ID } from '../utils/orders'
 import { rangeLabel } from '../reports/report'
+import { shareReportAvailable } from '../reports/delivery'
 import { statusTone } from '../utils/status'
 import {
   filterOrdersByRange,
@@ -39,11 +40,16 @@ export function Statistics() {
   )
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
-  // Состояние выгрузки: сборка файла асинхронная (её видно по кнопке), а результат
-  // объясняется текстом — «ничего не произошло» быть не должно.
-  const [exportBusy, setExportBusy] = useState(false)
+  // Что сейчас происходит: «Экспорт в Excel» готовит файл для скачивания, «Поделиться» —
+  // файл для отправки в чат. Пока идёт одно, второе недоступно: файл собирается один и тот
+  // же, а исход объясняется текстом — «ничего не произошло» быть не должно.
+  const [busy, setBusy] = useState<'' | 'export' | 'share'>('')
   const [exportError, setExportError] = useState('')
   const [exportNote, setExportNote] = useState('')
+  // Кнопка «Поделиться» есть только там, где такой путь умеет платформа: в мини-приложении
+  // Telegram файл уходит документом в выбранный чат, а в браузере и Android-сборке системное
+  // меню открывается уже при выгрузке — второй кнопки там не нужно.
+  const canShare = shareReportAvailable()
 
   // Плашка «Выручка» на главном экране ведёт на #/statistics?period=month.
   useEffect(() => {
@@ -70,20 +76,20 @@ export function Statistics() {
   // Выгрузка: данные отчёта собираются по выбранному здесь периоду — тому же, что
   // виден на экране. Модуль выгрузки подгружается по нажатию (в нём библиотека
   // сборки .xlsx), а исходы объясняются текстом под кнопкой.
+  const reportInput = () => ({
+    orders: db.getOrders(),
+    clients: db.getClients(true),
+    period,
+    custom: { from, to },
+  })
+
   const exportExcel = () => {
-    if (exportBusy) return
-    setExportBusy(true)
+    if (busy) return
+    setBusy('export')
     setExportError('')
     setExportNote('')
     void import('../reports/export')
-      .then(({ exportReport }) =>
-        exportReport({
-          orders: db.getOrders(),
-          clients: db.getClients(true),
-          period,
-          custom: { from, to },
-        }),
-      )
+      .then(({ exportReport }) => exportReport(reportInput()))
       .then(({ fileName, delivery }) => {
         if (delivery.kind === 'native' || delivery.kind === 'shared') {
           setExportNote('Файл готов — выберите, куда его сохранить или отправить.')
@@ -112,7 +118,44 @@ export function Statistics() {
         setExportError('Не удалось передать файл — попробуйте ещё раз.')
       })
       .catch((error) => setExportError(exportErrorMessage(error)))
-      .finally(() => setExportBusy(false))
+      .finally(() => setBusy(''))
+  }
+
+  // «Поделиться»: тот же файл, но уходит документом в чат, который выберет пользователь
+  // (родное меню клиента Telegram). Исходов у этого пути больше, чем «получилось или нет»,
+  // поэтому каждый объясняется своей строкой.
+  const shareExcel = () => {
+    if (busy) return
+    setBusy('share')
+    setExportError('')
+    setExportNote('')
+    void import('../reports/export')
+      .then(({ shareReport }) => shareReport(reportInput()))
+      .then(({ fileName, share }) => {
+        if (share.kind === 'sent') {
+          setExportNote(`${fileName} ушёл в выбранный чат документом.`)
+          return
+        }
+        if (share.kind === 'link') {
+          setExportNote('Файл отдать не вышло — в чат ушла ссылка на отчёт (живёт час).')
+          return
+        }
+        if (share.kind === 'cancelled') {
+          setExportNote('Отправка отменена — можно попробовать ещё раз.')
+          return
+        }
+        if (share.kind === 'expired') {
+          setExportNote('Сообщение устарело — нажмите «Поделиться» ещё раз.')
+          return
+        }
+        if (share.kind === 'unavailable') {
+          setExportError('Поделиться в этой версии Telegram нечем — файл сохранит «Экспорт в Excel».')
+          return
+        }
+        setExportError('Не удалось подготовить отправку — попробуйте ещё раз.')
+      })
+      .catch((error) => setExportError(exportErrorMessage(error)))
+      .finally(() => setBusy(''))
   }
 
   return (
@@ -164,20 +207,39 @@ export function Statistics() {
         </div>
       )}
 
-      {/* Выгрузка в Excel за тот же период, что выбран чипами выше. */}
+      {/* Выгрузка в Excel за тот же период, что выбран чипами выше. Рядом — «Поделиться»:
+          тот же файл, но уходит документом в чат, который выберет пользователь (кнопка есть
+          только в мини-приложении Telegram). */}
       <div className="section" style={{ marginTop: 16 }}>
         <Button
           variant="outline"
           icon="download"
           full
-          disabled={exportBusy}
+          disabled={busy !== ''}
           onClick={exportExcel}
         >
-          {exportBusy ? 'Готовим файл…' : 'Экспорт в Excel'}
+          {busy === 'export' ? 'Готовим файл…' : 'Экспорт в Excel'}
         </Button>
         <div className="field-hint" style={{ marginTop: 6 }}>
           Пять листов: сводка, продажи, позиции, клиенты и товары за этот период
         </div>
+        {canShare && (
+          <>
+            <Button
+              variant="outline"
+              icon="share"
+              full
+              style={{ marginTop: 8 }}
+              disabled={busy !== ''}
+              onClick={shareExcel}
+            >
+              {busy === 'share' ? 'Готовим файл…' : 'Поделиться'}
+            </Button>
+            <div className="field-hint" style={{ marginTop: 6 }}>
+              Отправить отчёт файлом в чат — получателя вы выберете в Telegram
+            </div>
+          </>
+        )}
         {exportNote && (
           <div className="field-hint" style={{ marginTop: 6 }}>
             {exportNote}

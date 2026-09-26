@@ -274,10 +274,10 @@ Telegram → HTTPS webhook → Cloudflare Worker → Telegram Bot API
 
 Данные CRM через Worker не проходят: он обслуживает Bot API и хранит только те файлы, которые
 мини-приложение отдаёт пользователю **временно** — собранный отчёт в Excel лежит в хранилище
-KV час под случайным именем и удаляется сам (`POST /files` → ссылка, `GET /files/<id>` → файл;
-см. раздел «Отчёт в Excel»). Ни базы, ни резервных
-копий на сервере SelfCRM нет — они остаются на устройстве и в облаке Telegram (раздел 8
-в `docs/TELEGRAM_ARCHITECTURE.md`).
+KV час под случайным именем и удаляется сам (`POST /files` → ссылка, `GET /files/<id>` → файл,
+`POST /files/<id>/share` → сообщение с файлом для «Поделиться»; см. раздел «Отчёт в Excel»).
+Ни базы, ни резервных копий на сервере SelfCRM нет — они остаются на устройстве и в облаке
+Telegram (раздел 8 в `docs/TELEGRAM_ARCHITECTURE.md`).
 
 Кроме кнопки запуска бот добавляет к ответам постоянные ссылки: GitHub (исходный код),
 лендинг (возможности и установка) и группа SelfCRM (вопросы и обсуждения). Это константы
@@ -307,8 +307,9 @@ npm run bot:setup -- --chat 123456789   # дополнительно кнопк�
 
 | Файл | Что это |
 | --- | --- |
-| `worker/src/index.ts` | вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (иначе 403), ответ Telegram — HTTP 200, если обновление обработано, и 500, если обработка упала; ещё маршруты `POST /files` и `GET /files/<id>` — временная выдача файлов мини-приложению |
+| `worker/src/index.ts` | вход Worker: `POST /telegram/webhook`, проверка заголовка `X-Telegram-Bot-Api-Secret-Token` (иначе 403), ответ Telegram — HTTP 200, если обновление обработано, и 500, если обработка упала; ещё маршруты `POST /files` и `GET /files/<id>` — временная выдача файлов мини-приложению, `POST /files/<id>/share` — подготовка сообщения «Поделиться» |
 | `worker/src/files.ts` | временное хранилище файлов (Workers KV): приём отчёта, ссылка со случайным именем, срок жизни час, имя файла и CORS-заголовки |
+| `worker/src/share.ts`, `worker/src/webappAuth.ts` | «Поделиться»: проверка подписи `initData` (HMAC-схема Telegram) и сообщение с файлом, которое собирает бот (`savePreparedInlineMessage`) — его отправляет клиент своим меню выбора чата |
 | `worker/src/handler.ts` | обработка обновлений: команды, документы, платежи |
 | `worker/src/messages.ts` | тексты и кнопки бота (перенесены из `scripts/telegram-bot.mjs` без изменений) |
 | `worker/src/telegram.ts` | вызовы Bot API; токен не попадает ни в ответ, ни в лог (`scrub`) |

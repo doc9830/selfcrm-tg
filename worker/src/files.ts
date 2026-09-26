@@ -11,6 +11,11 @@
 //   OPTIONS /files   — предварительный запрос браузера (CORS): мини-приложение живёт
 //                      на GitHub Pages, то есть на другом домене
 //
+// Рядом живёт «Поделиться» — `POST /files/<id>/share`: файл уходит документом в выбранный
+// чат Telegram (worker/src/share.ts). Путь начинается так же, как у файлов, поэтому в
+// `worker/src/index.ts` слой «Поделиться» вызывается раньше: этот модуль отвечает 404 на
+// всё, что не «приём» и не «скачать по идентификатору».
+//
 // Хранение — Workers KV с истечением срока: постоянных публичных ссылок нет, имя
 // случайное (22 символа base64url), размер ограничен, файл живёт час и удаляется
 // хранилищем сам. Данные CRM на сервере при этом не живут: KV хранит только
@@ -23,7 +28,16 @@ const ALLOWED_TYPES = [
   'application/pdf',
 ] as const
 
-const DEFAULT_TYPE = 'application/octet-stream'
+// Тип отчёта в Excel. Экспортируется ради слоя «Поделиться» и тестов: в сообщении с файлом тип
+// обязателен, а отчёт — это zip-контейнер, поэтому «Поделиться» отдаёт его как `application/zip`
+// (worker/src/share.ts).
+export const REPORT_XLSX_TYPE = ALLOWED_TYPES[0]
+
+// PDF — второй разрешённый тип файла; в сообщении «Поделиться» он остаётся собой.
+export const REPORT_PDF_TYPE = ALLOWED_TYPES[1]
+
+// Запасной тип: подпись файла потерялась или тип не из списка разрешённых.
+const DEFAULT_FILE_TYPE = 'application/octet-stream'
 
 // Хранилище временных файлов (Workers KV). В `worker/tsconfig.json` нет типов
 // Cloudflare (`types: []`), поэтому объявлен ровно тот минимум методов, который нужен:
@@ -42,7 +56,7 @@ export const FILES_PATH = '/files'
 
 // Срок жизни файла: час — достаточно, чтобы открыть ссылку и сохранить файл. Дольше
 // не нужно: ссылка живёт в чате, а не в CRM.
-const FILE_TTL_SECONDS = 60 * 60
+export const FILE_TTL_SECONDS = 60 * 60
 
 // Предел размера: отчёт по личной CRM весит десятки килобайт, поэтому 8 МБ — это
 // защита от чужой заливки, а не ограничение для пользователя.
@@ -80,7 +94,16 @@ export async function handleFiles(request: Request, env: FilesEnv): Promise<Resp
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return message('Method not allowed\n', 405)
   }
-  return downloadFile(url.pathname.slice(FILES_PATH.length + 1), request, env)
+  return downloadFile(fileIdFromPath(url.pathname), request, env)
+}
+
+// Идентификатор файла из адреса `/files/<id>` — или `/files/<id>/<имя>`. Имя в адресе не
+// украшение: по нему Telegram называет документ, который скачивает для сообщения «Поделиться»
+// (см. worker/src/share.ts). Сам файл отдаётся по подписи хранилища, поэтому и с именем в
+// адресе, и без него скачивается одно и то же.
+function fileIdFromPath(pathname: string): string {
+  const [id] = pathname.slice(FILES_PATH.length + 1).split('/')
+  return id ?? ''
 }
 
 // Приём файла: байты сохраняются во временном хранилище, в ответ приходит ссылка.
@@ -101,16 +124,12 @@ async function uploadFile(request: Request, env: FilesEnv): Promise<Response> {
   if (bytes.byteLength === 0) return json({ error: 'Пустой файл' }, 400)
   if (bytes.byteLength > MAX_FILE_BYTES) return json({ error: 'Файл слишком большой' }, 413)
 
-  const id = randomId()
   const name = decodeFileName(request.headers.get('X-File-Name')) ?? 'SelfCRM_Отчет.xlsx'
   const type = normalizedType(request.headers.get('Content-Type'))
 
-  // Две записи: сам файл и его подпись (имя и тип). Имя не помещается в адрес, а
-  // отдавать файл без него нельзя — браузер сохранит его как «download».
-  await store.put(id, bytes, { expirationTtl: FILE_TTL_SECONDS })
-  await store.put(metaKey(id), new TextEncoder().encode(JSON.stringify({ name, type })), {
-    expirationTtl: FILE_TTL_SECONDS,
-  })
+  // Имя не помещается в адрес, а отдавать файл без него нельзя — браузер сохранит его
+  // как «download», поэтому рядом с файлом лежит подпись с именем и типом.
+  const id = await storeFile(store, { bytes, name, type })
 
   const url = `${new URL(request.url).origin}${FILES_PATH}/${id}`
   // В логе только размер и идентификатор: ни имени файла, ни содержимого.
@@ -151,7 +170,7 @@ interface FileMeta {
 async function readMeta(store: ReportFilesStore, id: string): Promise<FileMeta> {
   try {
     const raw = await store.get(metaKey(id), 'arrayBuffer')
-    if (!raw) return { name: 'SelfCRM_Отчет.xlsx', type: DEFAULT_TYPE }
+    if (!raw) return { name: 'SelfCRM_Отчет.xlsx', type: DEFAULT_FILE_TYPE }
     const parsed = JSON.parse(new TextDecoder().decode(new Uint8Array(raw))) as Partial<FileMeta>
     return {
       name: safeFileName(parsed.name) ?? 'SelfCRM_Отчет.xlsx',
@@ -159,12 +178,45 @@ async function readMeta(store: ReportFilesStore, id: string): Promise<FileMeta> 
     }
   } catch {
     // Подпись потерялась — файл всё равно отдаём, только с запасным именем.
-    return { name: 'SelfCRM_Отчет.xlsx', type: DEFAULT_TYPE }
+    return { name: 'SelfCRM_Отчет.xlsx', type: DEFAULT_FILE_TYPE }
   }
 }
 
 function metaKey(id: string): string {
   return `${id}:name`
+}
+
+// Файл из хранилища целиком: байты и подпись (имя и тип). Нужен «Поделиться»: сообщение с
+// файлом собирает Worker, а не клиент (см. worker/src/share.ts).
+export interface StoredFile {
+  bytes: Uint8Array
+  name: string
+  type: string
+}
+
+// Кладёт файл в хранилище под новым случайным именем и отдаёт это имя. Срок отсчитывается
+// заново, поэтому вызовом пользуются оба случая: приём файла из мини-приложения и
+// «Поделиться» (сообщение уходит в чат, и ссылка внутри него должна быть живой не только в
+// минуту нажатия).
+export async function storeFile(store: ReportFilesStore, file: StoredFile): Promise<string> {
+  const id = randomId()
+  await store.put(id, file.bytes, { expirationTtl: FILE_TTL_SECONDS })
+  await store.put(
+    metaKey(id),
+    new TextEncoder().encode(JSON.stringify({ name: file.name, type: file.type })),
+    { expirationTtl: FILE_TTL_SECONDS },
+  )
+  return id
+}
+
+// Читает файл из хранилища. null — файла нет, срок вышел или идентификатор не того формата:
+// формат проверяется здесь же, поэтому чужой ключ хранилища этим вызовом не перебрать.
+export async function readStoredFile(store: ReportFilesStore, id: string): Promise<StoredFile | null> {
+  if (!ID_PATTERN.test(id)) return null
+  const bytes = await store.get(id, 'arrayBuffer')
+  if (!bytes) return null
+  const meta = await readMeta(store, id)
+  return { bytes: new Uint8Array(bytes), name: meta.name, type: meta.type }
 }
 
 // 16 случайных байт в base64url: без «+», «/» и «=», чтобы адрес не пришлось
@@ -200,7 +252,7 @@ function normalizedType(raw: unknown): string {
     .split(';')[0]
     .trim()
     .toLowerCase()
-  return (ALLOWED_TYPES as readonly string[]).includes(value) ? value : DEFAULT_TYPE
+  return (ALLOWED_TYPES as readonly string[]).includes(value) ? value : DEFAULT_FILE_TYPE
 }
 
 // Имя файла с кириллицей: старый `filename=` не гарантирует UTF-8, поэтому имя
@@ -211,14 +263,17 @@ function contentDisposition(name: string): string {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`
 }
 
-function message(body: string, status: number): Response {
+// Ответы этого слоя. Экспортируются ради «Поделиться»: запросы идут с того же адреса
+// (GitHub Pages), что и выгрузка файла, поэтому CORS-заголовки и формат ответа те же
+// (worker/src/share.ts).
+export function message(body: string, status: number): Response {
   return new Response(body, {
     status,
     headers: { 'Content-Type': 'text/plain; charset=utf-8', ...CORS_HEADERS },
   })
 }
 
-function json(body: Record<string, unknown>, status: number): Response {
+export function json(body: Record<string, unknown>, status: number): Response {
   return new Response(`${JSON.stringify(body)}\n`, {
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8', ...CORS_HEADERS },

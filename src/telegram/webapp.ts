@@ -120,8 +120,20 @@ export interface TelegramWebApp {
   // в мини-приложении `.xlsx` лежит в временном хранилище, а отдать его клиенту
   // можно только ссылкой — `blob` и `<a download>` WebView клиента игнорирует.
   downloadFile?(params: TelegramDownloadFileParams, callback?: (status: string) => void): void
-  onEvent(event: string, handler: () => void): void
-  offEvent(event: string, handler: () => void): void
+  // «Поделиться» сообщением бота (Bot API 8.0+): клиент открывает своё меню выбора чата и
+  // отправляет сообщение, которое заранее собрал бот (`savePreparedInlineMessage`). Нужно
+  // отчёту: файл со страницы в WebView не отдать, а сообщение с документом уходит в чат по
+  // выбору пользователя. Метод принимает только готовый идентификатор сообщения.
+  shareMessage?(msg_id: string, callback?: (sent: boolean) => void): void
+  onEvent(event: string, handler: (payload?: TelegramEventPayload) => void): void
+  offEvent(event: string, handler: (payload?: TelegramEventPayload) => void): void
+}
+
+// Данные события клиента. Пока нужен один: причина отказа «Поделиться» (событие
+// `shareMessageFailed` присылает `{ error }` — 'UNSUPPORTED', 'MESSAGE_EXPIRED',
+// 'MESSAGE_SEND_FAILED', 'USER_DECLINED' или 'UNKNOWN_ERROR').
+export interface TelegramEventPayload {
+  error?: string
 }
 
 declare global {
@@ -265,4 +277,93 @@ export function openInvoice(url: string, onStatus: (status: string) => void): bo
   if (!insideTelegramWebView() || !app?.openInvoice) return false
   app.openInvoice(url, onStatus)
   return true
+}
+
+// Исход «Поделиться»: родное меню клиента открылось и сообщение ушло, пользователь закрыл
+// меню сам, сообщение устарело, клиент этого не умеет или отправка не удалась. Интерфейс
+// объясняет исход текстом — «ничего не произошло» быть не должно.
+export type TelegramShareOutcome = 'sent' | 'cancelled' | 'expired' | 'unsupported' | 'failed'
+
+// Событие клиента с причиной отказа (документация Telegram, shareMessageFailed).
+const SHARE_FAILED_EVENT = 'shareMessageFailed'
+
+// Сколько ждать ответа клиента. Меню модальное: пока пользователь выбирает чат, ответа не
+// будет, и если он ушёл в другое приложение да вернулся — ответ всё равно придёт. Предел
+// нужен лишь на случай, когда клиент не отвечает вовсе: иначе кнопка «залипнет» навсегда.
+const SHARE_TIMEOUT_MS = 5 * 60 * 1000
+
+// Пауза перед тем, как счесть отмену отказом: клиент присылает и событие с причиной, и
+// callback с «нет», а порядок между ними не гарантирован.
+const SHARE_SETTLE_MS = 100
+
+// Открывает родное меню «Поделиться» для сообщения, подготовленного ботом
+// (`savePreparedInlineMessage` → `PreparedInlineMessage.id`). Возвращает исход строкой:
+// решение о запасном пути остаётся за вызывающим (src/telegram/files.ts).
+export async function shareTelegramMessage(
+  preparedMessageId: string,
+  options: { timeoutMs?: number; settleMs?: number } = {},
+): Promise<TelegramShareOutcome> {
+  const app = getTelegramWebApp()
+  if (!insideTelegramWebView() || !app || typeof app.shareMessage !== 'function') {
+    return 'unsupported'
+  }
+
+  const msgId = preparedMessageId.trim()
+  if (!msgId) return 'failed'
+
+  // Методы клиента забираем значениями с привязкой: внутри промиса свойства `app` уже не
+  // сужаются, а события в старых клиентах могут отсутствовать вовсе.
+  const shareMessage = app.shareMessage.bind(app)
+  const onEvent = typeof app.onEvent === 'function' ? app.onEvent.bind(app) : null
+  const offEvent = typeof app.offEvent === 'function' ? app.offEvent.bind(app) : null
+
+  const settleMs = options.settleMs ?? SHARE_SETTLE_MS
+  const timeoutMs = options.timeoutMs ?? SHARE_TIMEOUT_MS
+
+  return await new Promise<TelegramShareOutcome>((resolve) => {
+    let closed = false
+    let reason = ''
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let settle: ReturnType<typeof setTimeout> | undefined
+
+    function finish(outcome: TelegramShareOutcome): void {
+      if (closed) return
+      closed = true
+      if (timer) clearTimeout(timer)
+      if (settle) clearTimeout(settle)
+      // Обработчик снимаем: иначе следующее нажатие получило бы ответ прошлого меню.
+      offEvent?.(SHARE_FAILED_EVENT, onFailed)
+      resolve(outcome)
+    }
+
+    function onFailed(payload?: TelegramEventPayload): void {
+      reason = typeof payload?.error === 'string' ? payload.error : ''
+      finish(shareFailureOutcome(reason))
+    }
+
+    function onClosed(sent: boolean): void {
+      if (sent) return finish('sent')
+      // Причина приходит отдельным событием: даём ему долететь, иначе «пользователь закрыл
+      // меню» выглядело бы как сбой отправки.
+      settle = setTimeout(() => finish(shareFailureOutcome(reason)), settleMs)
+    }
+
+    timer = setTimeout(() => finish('failed'), timeoutMs)
+    onEvent?.(SHARE_FAILED_EVENT, onFailed)
+    try {
+      shareMessage(msgId, onClosed)
+    } catch {
+      // Клиент объявил метод, но вызвать его не дал: запасной путь выберет вызывающий.
+      finish('failed')
+    }
+  })
+}
+
+// Код отказа клиента → исход для интерфейса. Незнакомый код — 'failed': «ничего не
+// произошло» быть не должно.
+function shareFailureOutcome(error: string): TelegramShareOutcome {
+  if (error === 'USER_DECLINED') return 'cancelled'
+  if (error === 'MESSAGE_EXPIRED') return 'expired'
+  if (error === 'UNSUPPORTED') return 'unsupported'
+  return 'failed'
 }

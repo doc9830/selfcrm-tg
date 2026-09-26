@@ -167,6 +167,15 @@ scripts/sync-from-selfcrm.mjs       перенос изменений upstream
   Worker'а и скачивание клиентом, `worker/src/files.ts` (+ тест) — сами маршруты `/files`,
   привязка KV `REPORT_FILES` в `wrangler.toml`.
 
+Позже, уже после переноса, здесь появился второй путь доставки — кнопка «Поделиться»: файл уходит
+документом в чат, который выберет пользователь (родное меню клиента `WebApp.shareMessage`, а
+сообщение собирает бот — `savePreparedInlineMessage`). В Android-версии такого пути нет, поэтому
+всё это живёт только здесь: `worker/src/share.ts` и `worker/src/webappAuth.ts` (+ тесты), путь
+`share` у моста в `src/telegram/files.ts`, `shareReportFile()` / `shareReportAvailable()` в
+`src/reports/delivery.ts`, `shareReport()` в `src/reports/export.ts`, `shareTelegramMessage()` в
+`src/telegram/webapp.ts` и вторая кнопка в `src/screens/Statistics.tsx` — с этого момента этот
+экран расходится с Android-версией, и при следующем переносе он идёт через ручное слияние.
+
 ## 2. Правило минимальной дивергенции
 
 Список из 19 файлов `src/**` (плюс девять файлов вне `src/`) — это цена адаптации: чем он
