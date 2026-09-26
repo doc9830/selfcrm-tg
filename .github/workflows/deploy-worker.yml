@@ -48,10 +48,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Node 22 обязателен: wrangler 4 (devDependency) объявляет engines.node >= 22 и на
+      # Node 20 не запускается вовсе — команда падает сразу, ничего не публикуя.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -80,11 +82,13 @@ jobs:
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         run: |
           echo "Node: $(node -v)"
-          echo "wrangler: $(npx wrangler --version 2>&1 | tail -1)"
           echo "Account ID: $CLOUDFLARE_ACCOUNT_ID"
-          if npx wrangler whoami 2>&1 | tee /tmp/whoami.log; then
+          # Без пайпов: код возврата wrangler не должен нигде теряться.
+          if npx wrangler whoami > /tmp/whoami.log 2>&1; then
+            cat /tmp/whoami.log
             echo "whoami: ок"
           else
+            cat /tmp/whoami.log
             # Текст ошибки дублируем в аннотацию: она видна в списке запуска и через API,
             # даже когда логи недоступны. Значения секретов GitHub маскирует сам.
             echo "::error::wrangler whoami упал: $(tail -6 /tmp/whoami.log | tr '\n' ' ' | sed 's/%/%25/g' | sed 's/::/-/g')"
@@ -95,11 +99,12 @@ jobs:
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         run: |
           # Сообщение с хешем коммита: версия видна в панели Cloudflare, и по списку деплоев
-          # понятно, что залил именно этот коммит. Без сообщения wrangler пропускает
-          # публикацию, когда код совпадает с уже загруженной версией.
-          if npx wrangler deploy --message "GitHub Actions ${GITHUB_SHA:0:7}" 2>&1 | tee /tmp/deploy.log; then
+          # (Workers & Pages → selfcrm-bot → Deployments) понятно, что залил именно этот коммит.
+          if npx wrangler deploy --message "GitHub Actions ${GITHUB_SHA:0:7}" > /tmp/deploy.log 2>&1; then
+            tail -20 /tmp/deploy.log
             echo "Деплой Worker прошёл"
           else
+            tail -40 /tmp/deploy.log
             echo "::error::wrangler deploy упал: $(tail -8 /tmp/deploy.log | tr '\n' ' ' | sed 's/%/%25/g' | sed 's/::/-/g')"
             exit 1
           fi
