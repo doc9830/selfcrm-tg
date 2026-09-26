@@ -79,10 +79,24 @@ jobs:
       - name: Check Cloudflare credentials
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         run: |
+          echo "Node: $(node -v)"
+          echo "wrangler: $(npx wrangler --version 2>&1 | tail -1)"
           echo "Account ID: $CLOUDFLARE_ACCOUNT_ID"
-          echo "Токен задан: да (значение не печатается)"
-          npx wrangler whoami
+          if npx wrangler whoami 2>&1 | tee /tmp/whoami.log; then
+            echo "whoami: ок"
+          else
+            # Текст ошибки дублируем в аннотацию: она видна в списке запуска и через API,
+            # даже когда логи недоступны. Значения секретов GitHub маскирует сам.
+            echo "::error::wrangler whoami упал: $(tail -6 /tmp/whoami.log | tr '\n' ' ' | sed 's/%/%25/g' | sed 's/::/-/g')"
+            exit 1
+          fi
 
       - name: Deploy Cloudflare Worker
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
-        run: npx wrangler deploy
+        run: |
+          if npx wrangler deploy 2>&1 | tee /tmp/deploy.log; then
+            echo "Деплой Worker прошёл"
+          else
+            echo "::error::wrangler deploy упал: $(tail -8 /tmp/deploy.log | tr '\n' ' ' | sed 's/%/%25/g' | sed 's/::/-/g')"
+            exit 1
+          fi
