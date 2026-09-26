@@ -7,7 +7,8 @@ name: Deploy worker
 #   CLOUDFLARE_API_TOKEN  — токен с правом «Edit Cloudflare Workers» (Workers Scripts: Edit);
 #   CLOUDFLARE_ACCOUNT_ID — Account ID из панели Cloudflare.
 # Пока они не заданы, шаг деплоя пропускается (workflow не падает) — проверки и тесты
-# всё равно выполняются.
+# всё равно выполняются. Если токен задан, а Account ID нет или значения неверные, шаг
+# «Check Cloudflare credentials» печатает причину до попытки деплоя.
 #
 # Секреты самого Worker (BOT_TOKEN, WEBHOOK_SECRET) в GitHub не хранятся и в этом файле их
 # нет: они задаются один раз в Cloudflare — `npx wrangler secret put BOT_TOKEN` или с машины
@@ -59,6 +60,16 @@ jobs:
 
       - name: Tests
         run: npx vitest run
+
+      - name: Check Cloudflare credentials
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        run: |
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Секрет CLOUDFLARE_ACCOUNT_ID не задан. Account ID виден в панели Cloudflare → Workers & Pages (справа). См. README, раздел «Cloudflare: где живёт бот»."
+            exit 1
+          fi
+          echo "Account ID: $CLOUDFLARE_ACCOUNT_ID"
+          npx wrangler whoami
 
       - name: Deploy Cloudflare Worker
         if: env.CLOUDFLARE_API_TOKEN != ''
