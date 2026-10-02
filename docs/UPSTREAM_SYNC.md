@@ -3,7 +3,7 @@
 Этот репозиторий (`doc9830/selfcrm-tg`) — копия Android-проекта `doc9830/SelfCRM`,
 адаптированная под Telegram Mini App по отдельному техзаданию (в репозиторий оно не входит
 и хранится локально). Новые функции появляются в Android-репозитории, и их нужно переносить
-сюда. Документ фиксирует, насколько копии разошлись (замер 26.09.2026: обе версии — 1.7.0),
+сюда. Документ фиксирует, насколько копии разошлись (замер 02.10.2026: обе версии — 1.8.0),
 правило минимальной дивергенции и три способа переносить изменения дальше.
 
 ## Статус
@@ -43,12 +43,12 @@ workflow не упадёт: ветка синхронизации всё рав�
 
 | | |
 | --- | --- |
-| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.7.0` | 
+| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.8.0` | 
 | Mini App | `doc9830/selfcrm-tg`, ветка `main` |
-| `src/**` | 78 файлов в upstream, 102 здесь: 59 совпадает, 19 с локальной адаптацией, 24 только здесь |
+| `src/**` | 90 файлов в upstream, 114 здесь: 63 совпадает, 20 с локальной адаптацией, 31 только здесь |
 | Совпадает вне `src/` | 46 файлов: `public/mailto.html`, `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `package-lock.json`, `LICENSE`, `release-assets/**` (по `v1.5.0` включительно), `scripts/bump-version.mjs`, `scripts/telegram-release.mjs`, `scripts/fixtures/*`, `scripts/shots/*` (съёмка скриншотов: клиент DevTools, демо-база, оптимизация кадров), `android/**` кроме ассетов значка |
 | Только здесь вне `src/` | `public/route.html` — страница-мост для маршрута (в Android-версии системный выбор навигатора даёт `geo:`-intent Capacitor, а мини-приложению нужна страница в браузере клиента); `public/sw.js`, `docs/TELEGRAM_ARCHITECTURE.md`, `docs/UPSTREAM_SYNC.md`, `scripts/telegram-bot.mjs`, `scripts/set-webhook.mjs`, `worker/`, `wrangler.toml`, `scripts/sync-from-selfcrm.mjs`, `.github/workflows/ci.yml`, `.github/workflows/deploy-worker.yml`, `.github/workflows/sync-from-selfcrm.yml`, `.github/workflows/telegram-release.yml.disabled`, `.sync-state.json`, `android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml` (передний план адаптивного значка — в upstream он не нужен, там знак рисует `scripts/make-icons.py`) |
-| Только в upstream | `.github/workflows/telegram-release.yml`, `scripts/make-icons.py` и обложки `release-assets/v1.5.1`, `release-assets/v1.5.2`, `release-assets/v1.6.0`, `release-assets/v1.6.1`, `release-assets/v1.7.0`: здесь релизы не публикуются, поэтому обложек для новых версий нет |
+| Только в upstream | `.github/workflows/telegram-release.yml`, `scripts/make-icons.py` и обложки `release-assets/v1.5.1`, `release-assets/v1.5.2`, `release-assets/v1.6.0`, `release-assets/v1.6.1`, `release-assets/v1.7.0`, `release-assets/v1.7.1`, `release-assets/v1.8.0`: здесь релизы не публикуются, поэтому обложек для новых версий нет |
 
 **Файлы с локальной адаптацией** — 19 в `src/**` (все перечислены ниже) и вне `src/`:
 `index.html`, `package.json`, `.gitignore`, `.env.example`, `README.md`, `ARCHITECTURE.md`,
@@ -175,6 +175,39 @@ scripts/sync-from-selfcrm.mjs       перенос изменений upstream
 `src/reports/delivery.ts`, `shareReport()` в `src/reports/export.ts`, `shareTelegramMessage()` в
 `src/telegram/webapp.ts` и вторая кнопка в `src/screens/Statistics.tsx` — с этого момента этот
 экран расходится с Android-версией, и при следующем переносе он идёт через ручное слияние.
+
+### Пример: перенос 1.7.0 → 1.8.0 (напоминания в системе, прайс-лист в PDF, теги клиентов)
+
+Запуск 02.10.2026 (`8c44596f7c..ebc523be8a`) — первая синхронизация после паузы в две версии
+(здесь не было ни `1.7.1` с системными отступами, ни `1.8.0`), поэтому в перенос попали и они.
+
+* **перенесено автоматически (35 файлов):** новые модули `src/notifications/**`,
+  `src/pdf/common.ts`, `src/pdf/priceListDoc.ts` (+ тест), `src/pdf/priceList.ts`,
+  `src/reports/deliveryResult.ts` (+ тест), `src/utils/clients.ts` (+ тест), `src/utils/errors.ts`,
+  `src/components/TagField.tsx`, `src/components/ReminderNotifications.tsx`, `src/safeArea.test.ts`
+  (тест системных отступов из `1.7.1`), а также общие правки `src/screens/Clients.tsx`,
+  `src/screens/Products.tsx`, `src/types.ts`, `src/utils/links.ts` (+ тест), `src/utils/back.ts`,
+  `src/db/database.ts` (+ тест), `src/components/Layout.tsx`, ресурсы значка
+  `android/app/src/main/res/drawable-*/ic_stat_selfcrm.png`, `scripts/shots/*`;
+* **слито вручную (14 файлов):** `src/reports/delivery.ts` (тип файла для прайса:
+  `REPORT_PDF_TYPE` и `type?: string` — рядом с нашим «Поделиться»), `src/App.tsx`
+  (`<ReminderNotifications />` рядом с `TelegramShell`), `src/screens/ClientDetail.tsx` (теги),
+  `src/screens/Settings.tsx` (раздел «Напоминания»), `src/index.css` (стили тегов и правила
+  системных отступов: высота нижнего меню теперь прибавляет `--safe-bottom`, а `--safe-*` берёт
+  максимум из env(), переменных Capacitor и Telegram), `package.json` (+ `@capacitor/local-notifications`)
+  и `package-lock.json`, `src/version.ts`, `README.md`, `ARCHITECTURE.md`, `ANDROID.md`;
+* **решено не переносить:** `src/pdf/documents.ts` — в Telegram-версии чек собирается своей связкой
+  `pdf/receipt.ts` + `receiptDelivery.ts`, общая шапка чека и прайс-листа ей не нужна;
+  `src/screens/Statistics.tsx` — здесь у выгрузки есть вторая кнопка «Поделиться», и тексты исхода
+  свои (общий `reports/deliveryResult.ts` используется экраном «Товары»);
+  `scripts/make-icons.py` — значки в этом репозитории собираются иначе;
+* **проверки после слияния:** `npm run typecheck`, `npm test` (587 тестов против 583: добавились
+  тесты тегов, напоминаний, прайс-листа, пояснений выгрузки и системных отступов), `npm run build`
+  (прайс-лист уходит отдельным ленивым чанком `priceList-*.js`).
+
+Вывод тот же, что и год назад: перенос функций, живущих в отдельных модулях, проходит
+автоматически, а ручное слияние упирается в те же экраны (`App.tsx`, `Settings.tsx`, `index.css`)
+и файлы зависимостей.
 
 ## 2. Правило минимальной дивергенции
 

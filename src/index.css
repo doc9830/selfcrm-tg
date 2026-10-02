@@ -18,9 +18,12 @@
   --nav-h: 60px;
   --header-h: 56px;
   /* Безопасные отступы. Внутри Telegram клиент отдаёт свои значения
-     (--tg-safe-area-inset-*), в обычном браузере работает env(safe-area-inset-*). */
-  --safe-top: var(--tg-safe-area-inset-top, env(safe-area-inset-top));
-  --safe-bottom: var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom));
+     (--tg-safe-area-inset-*), в обычном браузере работают системные инсеты через env().
+     Capacitor 8 дублирует системные инсеты в CSS-переменные (--safe-area-inset-*),
+     а Android-WebView отдаёт их только через env(), поэтому берётся максимум из трёх:
+     иначе полоса навигации системы накрывает нижнее меню (см. src/safeArea.test.ts). */
+  --safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px), var(--tg-safe-area-inset-top, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px));
 }
 
 * {
@@ -140,7 +143,7 @@ button {
 
 .app-main {
   flex: 1;
-  padding: 16px 16px calc(var(--nav-h) + 24px);
+  padding: 16px 16px calc(var(--nav-h) + 24px + var(--safe-bottom));
 }
 
 /* ---- Нижняя навигация ---- */
@@ -152,7 +155,10 @@ button {
   transform: translateX(-50%);
   width: 100%;
   max-width: 560px;
-  height: var(--nav-h);
+  /* Высота полосы вкладок плюс системный отступ: при box-sizing: border-box отступ
+     не съедает высоту, а прибавляется к ней — иначе подписи вкладок уезжают под
+     системную полосу Android (см. src/safeArea.test.ts). */
+  height: calc(var(--nav-h) + var(--safe-bottom));
   display: flex;
   background: var(--surface);
   border-top: 1px solid var(--border);
@@ -385,7 +391,7 @@ button {
   align-items: flex-end;
   justify-content: center;
   z-index: 50;
-  padding: 16px;
+  padding: 16px 16px calc(16px + var(--safe-bottom));
 }
 
 .modal {
@@ -713,6 +719,74 @@ button {
   background: var(--primary);
   border-color: var(--primary);
   color: #fff;
+}
+
+/* ---- Теги клиентов ---- */
+
+/* Тег — подпись, а не кнопка: в списке и в карточке он показан плашкой, а убирается
+   только в поле редактирования (там рядом с подписью есть крестик). */
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.7;
+}
+
+.tag-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  opacity: 0.7;
+}
+
+.tag-remove:hover {
+  opacity: 1;
+}
+
+/* Поле тегов в карточке клиента: список выбранных, строка ввода и готовые подписи. */
+.tag-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tag-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tag-input .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-suggestions .chip {
+  padding: 5px 11px;
+  font-size: 12px;
 }
 
 /* ---- Обратная связь ---- */

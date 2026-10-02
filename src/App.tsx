@@ -1,5 +1,6 @@
 import { Layout } from './components/Layout'
 import { SupportBanner } from './components/SupportBanner'
+import { ReminderNotifications } from './components/ReminderNotifications'
 import { SystemBack } from './components/SystemBack'
 import { TelegramShell } from './components/TelegramShell'
 import { UpdateToast } from './components/UpdateToast'
@@ -26,6 +27,9 @@ export function App() {
       {renderScreen()}
       <SystemBack />
       <TelegramShell />
+      {/* Напоминания в системе: разметки не добавляет — следит за базой и обновляет
+          расписание уведомлений Android (в браузере и в Telegram ничего не делает). */}
+      <ReminderNotifications />
       {/* Плашка «Поддержите разработку»: показывается только на главном экране и по
           правилам из utils/support.ts (см. SupportBanner). */}
       <SupportBanner />
