@@ -159,6 +159,8 @@ function filePage(id: string, file: StoredFile, text: string, nonce: string): st
         display: block; margin-top: 12px; padding: 12px 16px; border: 1px solid #d1d5db;
         border-radius: 12px; text-align: center; text-decoration: none; color: inherit;
       }
+      /* Скачивание становится главным действием там, где системное меню файл не берёт. */
+      .save.primary { border-color: #2563eb; background: #2563eb; color: #ffffff; font-weight: 600; }
       .note { margin: 16px 0 0; font-size: 13px; color: #6b7280; }
       @media (prefers-color-scheme: dark) {
         body { background: #16181c; color: #e8eaed; }
@@ -183,6 +185,13 @@ function filePage(id: string, file: StoredFile, text: string, nonce: string): st
     <script nonce="${nonce}">
       // Меню открывается нажатием, а не загрузкой страницы: без жеста Safari на iPhone
       // отказывает. Поэтому файл забирается заранее, а по нажатию уходит уже готовым.
+      //
+      // Системное меню берёт не любой файл: Chromium делится только документами PDF,
+      // картинками, звуком, видео и текстом, поэтому таблицу .xlsx в Chrome на Android оно
+      // не отдаёт (в Safari на iPhone ограничения нет). Такой файл страница не обещает отдать
+      // меню, а сразу предлагает сохранение — иначе нажатие выглядело бы как «ничего не
+      // произошло». Проверка идёт по факту (пробный файл и navigator.canShare), а не по
+      // названию браузера.
       var fileUrl = ${scriptValue(fileUrl)};
       var fileName = ${scriptValue(file.name)};
       var shareText = ${scriptValue(text)};
@@ -190,9 +199,33 @@ function filePage(id: string, file: StoredFile, text: string, nonce: string): st
       var note = document.getElementById('note');
       var save = document.getElementById('save');
       var ready = null;
+      var shareable = false;
 
       function setNote(text) {
         note.textContent = text;
+      }
+
+      // Вызывать меню нужно из жеста — здесь только проверка, что браузер такой файл примет.
+      function canShareFile(file) {
+        if (!navigator.share || !navigator.canShare) return false;
+        try {
+          return navigator.canShare({ files: [file] });
+        } catch (error) {
+          return false;
+        }
+      }
+
+      // Скачивание — запасной путь страницы: файл попадёт в «Загрузки», а оттуда его
+      // отправят любым приложением. Здесь же он ведёт себя как основное действие, если
+      // системное меню такой файл не берёт.
+      function download() {
+        save.click();
+      }
+
+      // Отметка в подписи под кнопкой при скачивании: иначе нажатие выглядит как «ничего
+      // не произошло», особенно если браузер открыл файл вместо сохранения.
+      function downloadedNote() {
+        setNote('Файл скачан в «Загрузки» — оттуда его можно отправить в мессенджер.');
       }
 
       fetch(fileUrl, { cache: 'no-store' })
@@ -202,8 +235,19 @@ function filePage(id: string, file: StoredFile, text: string, nonce: string): st
         })
         .then(function (blob) {
           ready = new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
+          shareable = canShareFile(ready);
           button.disabled = false;
-          button.textContent = 'Поделиться';
+          if (shareable) {
+            button.textContent = 'Поделиться';
+          } else {
+            // Меню такой файл не берёт: обещать «Поделиться» нельзя — страница честно
+            // предлагает скачать файл, а кнопку убирает, чтобы не было пустого нажатия.
+            button.hidden = true;
+            save.className = 'save primary';
+            setNote(
+              'Этот браузер не отдаёт такие файлы системному меню (Chrome умеет делиться только PDF, картинками, звуком, видео и текстом). Файл скачается в «Загрузки» — оттуда его можно отправить в мессенджер.',
+            );
+          }
         })
         .catch(function () {
           button.textContent = 'Файл больше недоступен';
@@ -213,10 +257,10 @@ function filePage(id: string, file: StoredFile, text: string, nonce: string): st
 
       button.addEventListener('click', function () {
         if (!ready) return;
-        if (!navigator.share || !navigator.canShare || !navigator.canShare({ files: [ready] })) {
-          setNote(
-            'Этот браузер не открывает системное меню со страницы — нажмите «Поделиться» в самом браузере или сохраните файл по ссылке «Скачать файл».',
-          );
+        // Файл, который меню не берёт: нажатие кладёт его в «Загрузки» и говорит об этом.
+        if (!shareable) {
+          download();
+          downloadedNote();
           return;
         }
         var data = { files: [ready], title: fileName };
@@ -231,9 +275,10 @@ function filePage(id: string, file: StoredFile, text: string, nonce: string): st
             if (error && error.name === 'AbortError') {
               setNote('Отмена — нажмите «Поделиться» ещё раз, если нужно.');
             } else {
-              setNote(
-                'Системное меню не открылось — нажмите «Поделиться» в самом браузере или сохраните файл по ссылке «Скачать файл».',
-              );
+              // Меню не открылось (браузер отказал или файл всё-таки не его типа): файл
+              // скачивается, чтобы нажатие не заканчивалось ничем.
+              download();
+              downloadedNote();
             }
           })
           .then(function () {

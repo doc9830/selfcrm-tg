@@ -3,7 +3,7 @@
 Этот репозиторий (`doc9830/selfcrm-tg`) — копия Android-проекта `doc9830/SelfCRM`,
 адаптированная под Telegram Mini App по отдельному техзаданию (в репозиторий оно не входит
 и хранится локально). Новые функции появляются в Android-репозитории, и их нужно переносить
-сюда. Документ фиксирует, насколько копии разошлись (замер 02.10.2026: обе версии — 1.8.0),
+сюда. Документ фиксирует, насколько копии разошлись (замер 03.10.2026: обе версии — 1.8.1),
 правило минимальной дивергенции и три способа переносить изменения дальше.
 
 ## Статус
@@ -43,7 +43,7 @@ workflow не упадёт: ветка синхронизации всё рав�
 
 | | |
 | --- | --- |
-| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.8.0` | 
+| Android-версия | `doc9830/SelfCRM`, ветка `main`, тег `v1.8.1` | 
 | Mini App | `doc9830/selfcrm-tg`, ветка `main` |
 | `src/**` | 90 файлов в upstream, 114 здесь: 60 совпадает, 23 с локальной адаптацией, 31 только здесь |
 | Совпадает вне `src/` | 46 файлов: `public/mailto.html`, `vite.config.ts`, `tsconfig.json`, `capacitor.config.ts`, `package-lock.json`, `LICENSE`, `release-assets/**` (по `v1.5.0` включительно), `scripts/bump-version.mjs`, `scripts/telegram-release.mjs`, `scripts/fixtures/*`, `scripts/shots/*` (съёмка скриншотов: клиент DevTools, демо-база, оптимизация кадров), `android/**` кроме ассетов значка |
@@ -66,7 +66,7 @@ workflow не упадёт: ветка синхронизации всё рав�
 | `src/version.ts` | репозиторий обновлений: `doc9830/selfcrm-tg` вместо `doc9830/SelfCRM` |
 | `src/index.css` | safe area Telegram (`--tg-safe-area-inset-*`), высота окна |
 | `src/screens/Settings.tsx` | раздел Telegram, облачная копия, предпросмотр перед импортом; служебные копии в мини-приложении отдаются иначе, чем файлом: «Вернуть» (состояние до импорта возвращается прямо в приложении) и «Скопировать» (повреждённые данные текстом) вместо «Скачать» |
-| `src/screens/OrderDetail.tsx` | чек и «Поделиться» вместо сохранения файла |
+| `src/screens/OrderDetail.tsx` | чек уходит общей выгрузкой вместо собственного файлового пути (`shareOrderReceipt()`); подпись кнопки — как в upstream («Чек (PDF)») |
 | `src/utils/navigation.ts`, `src/utils/navigation.test.ts` | распознавание адреса клиента внутри Telegram и `openExternalLink` для ссылок; внутри мини-приложения маршрут открывает страница-мост `public/route.html` (`routeBridgeUrl()`): клиент пропускает через `openLink` только `http`/`https`, поэтому `geo:` отдаёт браузер клиента — Android показывает системный выбор навигатора, как в upstream; в браузере адрес отдаётся Яндекс.Картам поиском (`?text=<адрес>`), маршрутная ссылка — только по координатам |
 | `src/db/addresses.ts`, `src/db/addresses.test.ts` | `readUserAddresses()` — отличает свою базу адресов от демо-набора |
 | `src/pdf/documents.ts` | отдача документа браузеру вместо файловой системы; чек уходит общей выгрузкой (`shareOrderReceipt()` → `reports/delivery.ts`) вместо собственного выбора пути |
@@ -77,11 +77,11 @@ workflow не упадёт: ветка синхронизации всё рав�
 | `.gitignore`, `.env.example` | локальные файлы протокола и бота, переменные сборки Mini App |
 | `README.md`, `ARCHITECTURE.md`, `ANDROID.md` | описание Telegram-версии; в `ANDROID.md` дополнительно сказано, что подписи (`keystore.properties`) в этой копии нет и для проверки сборки хватает `assembleDebug` |
 | `docs/TELEGRAM_RELEASES.md` | пометка, что автопубликация релизов здесь отключена |
-| `src/reports/delivery.ts`, `src/reports/delivery.test.ts` | мост платформы и страница «Поделиться»: исходы `'page'`, `'cancelled'`, запасной путь документом в чат, тип файла в мосте (в upstream доставка знает только `native` / `file-share` / `file-download`) |
-| `src/reports/deliveryResult.ts`, `src/reports/deliveryResult.test.ts` | подпись для исхода «открылась страница «Поделиться»» и для отмены в запасном пути |
+| `src/reports/delivery.ts`, `src/reports/delivery.test.ts` | мост платформы и страница «Поделиться»: исходы `'page'`, `'chat'`, `'cancelled'`, запасной путь документом в чат, тип файла в мосте (в upstream доставка знает только `native` / `file-share` / `file-download`) |
+| `src/reports/deliveryResult.ts`, `src/reports/deliveryResult.test.ts` | подпись для исхода «открылась страница «Поделиться»», «открылось окно отправки Telegram» и для отмены в запасном пути |
 | `src/reports/export.ts` | одна точка входа на одну кнопку: `shareReport()` для второй кнопки не нужен |
 | `src/screens/Statistics.tsx` | одна кнопка «Экспорт в xlsx» вместо «Экспорт в Excel» + «Поделиться» |
-| `src/screens/Products.tsx` | кнопка «Поделиться» вместо «Прайс-лист в PDF»: файл уходит тем же путём, что отчёт |
+| `src/screens/Products.tsx` | кнопка **«Прайс-лист (PDF)»** вместо «Прайс-лист в PDF»: подпись называет формат файла, путь у него тот же, что у чека |
 | `src/api/dadata.ts`, `src/api/dadata.test.ts` | общий запрос подсказок `requestSuggestions()` и `toAddressPoint()`: точность координат (`qc_geo`) нужна маршруту |
 | `src/screens/ClientDetail.tsx` | комментарий к кнопке маршрута: с адресом Яндекс ищет улицу и дом сам, без адреса — по сохранённым координатам |
 | `.github/workflows/deploy-pages.yml` | здесь публикует Mini App на Pages (плюс пояснение адреса и `base: './'` в шапке файла); в upstream тот же workflow собирает веб-версию приложения |
@@ -184,20 +184,25 @@ scripts/sync-from-selfcrm.mjs       перенос изменений upstream
 `scripts/shots/shots.mjs` (в подписях кадров новые названия кнопок) — при следующем переносе они
 идут через ручное слияние.
 
-### Своя выгрузка файла: страница «Поделиться» (02.10.2026)
+### Своя выгрузка файла: страница «Поделиться» (02.10.2026, уточнена 03.10.2026)
 
-Кнопка выгрузки в мини-приложении открывает в браузере телефона **страницу «Поделиться»**
-(`GET /share/<id>` на Worker'е), а та отдаёт файл системному меню (`navigator.share`) — так выгрузка
-совпадает с Android-сборкой, где системное меню открывает Capacitor. Файл при этом лежит в KV
-Worker'а (час, случайное имя), как и раньше.
+Кнопка выгрузки в мини-приложении отдаёт файл системному меню, а не собственным файловым путём.
+Чем именно: документ и таблица на iPhone уходят **страницей «Поделиться»** в браузере телефона
+(`GET /share/<id>` на Worker'е, меню открывает `navigator.share`) — так выгрузка совпадает с
+Android-сборкой, где системное меню открывает Capacitor; **таблица на Android** сразу идёт родным
+меню чата (`WebApp.shareMessage`), потому что системное меню браузера файлы `.xlsx` не берёт:
+Chromium делится только PDF, картинками, звуком, видео и текстом. Файл при этом лежит в KV
+Worker'а (час, случайное имя), как и раньше; страница «Поделиться» проверяет файл пробным
+`navigator.canShare` и предлагает скачивание, если меню его не принимает.
 
 | Что | Где |
 | --- | --- |
 | Страница «Поделиться» и её проверки | `worker/src/sharePage.ts`, `worker/src/sharePage.test.ts` |
 | Маршрут страницы | `worker/src/index.ts` (разбирается раньше слоя файлов), `GET /share/<id>` в шапке файла |
 | Адрес страницы и пути выгрузки | `src/telegram/files.ts` (`reportSharePageUrl()`, `reportFileBridge`) |
-| Исход «страница открыта» | `'page'` в `ReportBridgeResult` (`src/reports/delivery.ts`) и его подпись (`src/reports/deliveryResult.ts`) |
-| Кнопки | «Экспорт в xlsx» (`src/screens/Statistics.tsx`), «Поделиться» (`src/screens/Products.tsx`, `src/screens/OrderDetail.tsx`) |
+| Чем отдать файл | `bridgePath()` (`src/telegram/files.ts`): таблица на Android → родное меню чата, остальное → страница |
+| Исходы «страница открыта» и «открылось окно отправки» | `'page'`, `'chat'` в `ReportBridgeResult` (`src/reports/delivery.ts`) и их подписи (`src/reports/deliveryResult.ts`) |
+| Кнопки | «Экспорт в xlsx» (`src/screens/Statistics.tsx`), «Чек (PDF)» (`src/screens/OrderDetail.tsx`), «Прайс-лист (PDF)» (`src/screens/Products.tsx`) |
 
 Всё это есть только здесь: в Android-версии системное меню открывает плагин, и страница ей не нужна.
 Обратная сторона — при переносе из upstream эти файлы нужно сливать вручную (перечислены выше).

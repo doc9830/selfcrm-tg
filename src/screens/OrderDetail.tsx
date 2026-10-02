@@ -398,10 +398,10 @@ export function OrderDetail({
                 .finally(() => setPdfBusy(false))
             }}
           >
-            {pdfBusy ? 'Формирование…' : 'Поделиться'}
+            {pdfBusy ? 'Формирование…' : 'Чек (PDF)'}
           </Button>
           <div className="field-hint" style={{ marginTop: 6 }}>
-            Чек уходит PDF-файлом: в системном окне выберите, куда его отправить или сохранить
+            Чек уходит файлом: в системном окне выберите, куда его отправить или сохранить
           </div>
           {pdfError && (
             <div className="field-error" style={{ marginTop: 6 }}>

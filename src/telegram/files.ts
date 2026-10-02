@@ -217,6 +217,21 @@ async function sharePreparedReport(
   return { kind: prepared ? 'failed' : 'unavailable' }
 }
 
+// Чем отдать файл в мини-приложении: открыть страницу «Поделиться» в браузере телефона
+// ('page') или сразу показать родное меню клиента Telegram ('chat').
+//
+// Системное меню браузера берёт не любой файл: Chromium делится только документами PDF,
+// картинками, звуком, видео и текстом (раздел «Shareable file types» в документации Web Share
+// API), поэтому таблица `.xlsx` в Chrome на Android до меню не доходит — страница открылась бы,
+// а «Поделиться» на ней не сработало. На iPhone у Safari такого ограничения нет: PDF и таблица
+// уходят системным меню одинаково, и там страница остаётся основным путём.
+//
+// Новое решение — чистая функция: порядок шагов проверяется тестами, а не руками на телефоне.
+export function bridgePath(platform: string | null, type: string): 'chat' | 'page' {
+  if (platform === 'android' && type === REPORT_XLSX_TYPE) return 'chat'
+  return 'page'
+}
+
 // Мост отчёта: файл → временная ссылка → страница «Поделиться» в браузере телефона.
 // Совпадает по интерфейсу с `ReportFileBridge`, поэтому общий код выгрузки про Telegram не
 // знает: и статистика, и прайс-лист, и чек вызывают одно действие и получают один исход.
@@ -225,14 +240,24 @@ export const reportFileBridge: ReportFileBridge = {
     const { blob, fileName, message, type } = input
     const uploaded = await uploadReportFile(blob, fileName, type)
 
-    // 1. Основной путь: страница «Поделиться» в браузере телефона. Системное меню открывает
+    // 1. Таблица в Android-клиенте: системное меню браузера файлы .xlsx не отдаёт, поэтому
+    //    первым шагом идёт родное меню Telegram — документ уходит в выбранный чат.
+    if (bridgePath(getTelegramWebApp()?.platform ?? null, type ?? REPORT_XLSX_TYPE) === 'chat') {
+      const chat = await sharePreparedReport(input, uploaded)
+      if (chat.kind === 'sent' || chat.kind === 'link') return { kind: 'chat', url: uploaded.url }
+      if (chat.kind === 'cancelled') return { kind: 'cancelled', url: uploaded.url }
+      // 'expired', 'unavailable' и 'failed' — повод для обычного порядка ниже: страница,
+      // скачивание клиентом, ссылка в буфер обмена.
+    }
+
+    // 2. Основной путь: страница «Поделиться» в браузере телефона. Системное меню открывает
     //    она сама (`navigator.share` с файлом), а файл ей отдаёт тот же Worker — поэтому
     //    выгрузка совпадает с Android-сборкой (см. worker/src/sharePage.ts).
     if (openExternalLink(reportSharePageUrl(uploaded.id, message)) !== 'failed') {
       return { kind: 'page', url: uploaded.url }
     }
 
-    // 2. Браузер открыть не вышло: файл уходит документом в выбранный чат Telegram — родное
+    // 3. Браузер открыть не вышло: файл уходит документом в выбранный чат Telegram — родное
     //    меню клиента, которое раньше открывала вторая кнопка на экране.
     const share = await sharePreparedReport(input, uploaded)
     if (share.kind === 'sent' || share.kind === 'link') {
@@ -240,10 +265,10 @@ export const reportFileBridge: ReportFileBridge = {
     }
     if (share.kind === 'cancelled') return { kind: 'cancelled', url: uploaded.url }
 
-    // 3. Клиент скачивает файл сам (Bot API 8.0+): файл появляется в «Загрузках».
+    // 4. Клиент скачивает файл сам (Bot API 8.0+): файл появляется в «Загрузках».
     if (downloadTelegramFile(uploaded.url, fileName)) return { kind: 'opened', url: uploaded.url }
 
-    // 4. Ничего не вышло: ссылка в буфер обмена — её можно открыть вручную.
+    // 5. Ничего не вышло: ссылка в буфер обмена — её можно открыть вручную.
     const copied = await copyTextToClipboard(`${message}\n${uploaded.url}`)
     return { kind: copied ? 'copied' : 'failed', url: uploaded.url }
   },

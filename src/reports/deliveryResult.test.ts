@@ -33,9 +33,12 @@ describe('Пояснение после выгрузки файла', () => {
   })
 
   it('объясняет исход доставки через мост', () => {
-    expect(
-      describeDelivery({ kind: 'bridge', result: { kind: 'page', url: 'u' } }, FILE).note,
-    ).toContain('страница «Поделиться»')
+    expect(describeDelivery({ kind: 'bridge', result: { kind: 'page', url: 'u' } }, FILE).note).toContain(
+      'страница «Поделиться»',
+    )
+    expect(describeDelivery({ kind: 'bridge', result: { kind: 'chat', url: 'u' } }, FILE).note).toContain(
+      'окно отправки Telegram',
+    )
     expect(describeDelivery({ kind: 'bridge', result: { kind: 'opened', url: 'u' } }, FILE).note).toContain(
       'уходит в «Загрузки»',
     )

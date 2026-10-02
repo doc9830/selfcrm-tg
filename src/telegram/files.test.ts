@@ -9,6 +9,7 @@ import {
   type ReportShareResult,
 } from '../reports/delivery'
 import {
+  bridgePath,
   registerTelegramReportFiles,
   reportFileBridge as bridge,
   reportFilesUrl,
@@ -174,10 +175,37 @@ describe('загрузка файла во временное хранилище
 })
 
 
+describe('чем отдать файл', () => {
+  it('таблица на Android идёт родным меню чата: системное меню браузера её не берёт', () => {
+    // Chromium делится только PDF, картинками, звуком, видео и текстом, поэтому страница
+    // «Поделиться» на Android для `.xlsx` открылась бы, а системное меню файл не приняло.
+    expect(bridgePath('android', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).toBe(
+      'chat',
+    )
+  })
+
+  it('на iPhone у Safari такого ограничения нет — таблица уходит страницей', () => {
+    expect(
+      bridgePath('ios', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+    ).toBe('page')
+  })
+
+  it('PDF идёт страницей: системное меню документы принимает', () => {
+    expect(bridgePath('android', 'application/pdf')).toBe('page')
+    expect(bridgePath('desktop', 'application/pdf')).toBe('page')
+  })
+
+  it('незнакомая платформа не меняет обычный путь', () => {
+    expect(
+      bridgePath(null, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+    ).toBe('page')
+  })
+})
+
 describe('мост: файл → ссылка → страница «Поделиться»', () => {
   it('основной путь: страница «Поделиться» открывается в браузере', async () => {
-    // Так выгрузка идёт всегда, когда клиент умеет открывать внешние ссылки: страница
-    // отдаёт файл системному меню телефона — тому же, что открывает Android-сборка.
+    // Так уходит документ, который системное меню принимает (PDF чека и прайс-листа):
+    // страница отдаёт файл системному меню телефона — тому же, что открывает Android-сборка.
     const opened: string[] = []
     stubTelegramWindow({
       openLink: (url) => {
@@ -187,9 +215,10 @@ describe('мост: файл → ссылка → страница «Подел�
     stubFetch(() => uploadedResponse())
 
     const result = await bridge.send({
-      blob: new Blob(['xlsx']),
-      fileName: FILE_NAME,
-      message: 'Отчёт SelfCRM',
+      blob: new Blob(['%PDF']),
+      fileName: 'Чек_42.pdf',
+      message: 'Чек SelfCRM',
+      type: 'application/pdf',
     })
 
     expect(result).toEqual({ kind: 'page', url: FILE_URL })
@@ -197,12 +226,55 @@ describe('мост: файл → ссылка → страница «Подел�
     const page = new URL(opened[0])
     // Страница живёт на том же домене, что и файл, — иначе браузер не отдаст файл меню.
     expect(page.pathname).toBe(`/share/${FILE_ID}`)
-    expect(page.searchParams.get('text')).toBe('Отчёт SelfCRM')
+    expect(page.searchParams.get('text')).toBe('Чек SelfCRM')
   })
 
-  it('браузер открыть нечем — файл уходит документом в выбранный чат', async () => {
-    // Запасной путь: родное меню клиента Telegram (то же, что раньше открывала вторая
-    // кнопка). До него дело доходит только при отказе браузера.
+  it('таблица на Android: первым шагом родное меню чата, браузер не открывается', async () => {
+    // Здесь путь другой, чем у документа: системное меню браузера файлы `.xlsx` не отдаёт,
+    // поэтому файл уходит документом в выбранный чат Telegram.
+    const shared: string[] = []
+    const opened: string[] = []
+    stubTelegramWindow({
+      shareMessage: (msgId, callback) => {
+        shared.push(msgId)
+        callback?.(true)
+      },
+      openLink: (url) => void opened.push(url),
+    })
+    stubWorker()
+
+    const result = await bridge.send({
+      blob: new Blob(['xlsx']),
+      fileName: FILE_NAME,
+      message: 'Отчёт SelfCRM',
+    })
+
+    expect(result).toEqual({ kind: 'chat', url: FILE_URL })
+    expect(shared).toEqual(['prepared-1'])
+    expect(opened).toEqual([])
+  })
+
+  it('таблица на iPhone: путь прежний — страница «Поделиться»', async () => {
+    const opened: string[] = []
+    stubTelegramWindow({
+      platform: 'ios',
+      openLink: (url) => void opened.push(url),
+    })
+    stubWorker()
+
+    const result = await bridge.send({
+      blob: new Blob(['xlsx']),
+      fileName: FILE_NAME,
+      message: 'Отчёт SelfCRM',
+    })
+
+    expect(result).toEqual({ kind: 'page', url: FILE_URL })
+    expect(opened).toHaveLength(1)
+  })
+
+  it('браузер открыть нечем — документ уходит в выбранный чат', async () => {
+    // Запасной путь для документа: родное меню клиента Telegram (то же, что раньше открывала
+    // вторая кнопка). До него дело доходит только при отказе браузера.
     const shared: string[] = []
     stubTelegramWindow({
       shareMessage: (msgId, callback) => {
@@ -213,9 +285,10 @@ describe('мост: файл → ссылка → страница «Подел�
     stubWorker()
 
     const result = await bridge.send({
-      blob: new Blob(['xlsx']),
-      fileName: FILE_NAME,
-      message: 'Отчёт SelfCRM',
+      blob: new Blob(['%PDF']),
+      fileName: 'Чек_42.pdf',
+      message: 'Чек SelfCRM',
+      type: 'application/pdf',
     })
 
     expect(result).toEqual({ kind: 'opened', url: FILE_URL })

@@ -37,6 +37,12 @@ export function describeDelivery(result: ReportDeliveryResult, fileName: string)
           error: '',
         }
       }
+      if (result.result.kind === 'chat') {
+        return {
+          note: 'Открылось окно отправки Telegram — в чат уйдёт документ или ссылка на файл.',
+          error: '',
+        }
+      }
       if (result.result.kind === 'opened') {
         return { note: 'Файл уходит в «Загрузки» — его можно открыть или отправить дальше.', error: '' }
       }

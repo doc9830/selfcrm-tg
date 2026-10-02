@@ -105,6 +105,22 @@ describe('страница с файлом', () => {
     expect(body).toContain('Скачать файл')
   })
 
+  it('файл, который системное меню не берёт, страница не обещает отдать меню', async () => {
+    // Chromium делится только PDF, картинками, звуком, видео и текстом: таблицу `.xlsx` он
+    // меню не отдаёт. Страница проверяет это по факту (пробным файлом) и предлагает скачивание,
+    // а на отказ меню отвечает скачиванием — «ничего не произошло» быть не должно.
+    const store = stubStore()
+    const id = await storeFile(store)
+
+    const response = (await handleSharePage(pageRequest(id), { REPORT_FILES: store })) as Response
+    const body = await response.text()
+
+    expect(body).toContain('canShare')
+    expect(body).toContain('save.className')
+    expect(body).toContain('Файл скачан в «Загрузки»')
+    expect(body).toContain('save.click()')
+  })
+
   it('подпись и имя файла не разрывают разметку и скрипт', async () => {
     const store = stubStore()
     const id = await storeFile(store)
