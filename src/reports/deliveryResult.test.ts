@@ -33,9 +33,15 @@ describe('Пояснение после выгрузки файла', () => {
   })
 
   it('объясняет исход доставки через мост', () => {
+    expect(
+      describeDelivery({ kind: 'bridge', result: { kind: 'page', url: 'u' } }, FILE).note,
+    ).toContain('страница «Поделиться»')
     expect(describeDelivery({ kind: 'bridge', result: { kind: 'opened', url: 'u' } }, FILE).note).toContain(
       'уходит в «Загрузки»',
     )
+    const cancelled = describeDelivery({ kind: 'bridge', result: { kind: 'cancelled', url: 'u' } }, FILE)
+    expect(cancelled.note).toBe('Отправка отменена — можно попробовать ещё раз.')
+    expect(cancelled.error).toBe('')
     expect(describeDelivery({ kind: 'bridge', result: { kind: 'copied', url: 'u' } }, FILE).note).toContain(
       'Ссылка на файл скопирована',
     )

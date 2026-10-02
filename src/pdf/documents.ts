@@ -1,35 +1,31 @@
 // Генерация документов. Реализован чек (квитанция) по завершённому заказу.
 // В основе — pdfmake: работает офлайн, встроенный шрифт Roboto поддерживает кириллицу.
 //
-// Чек отдаётся файлом или ссылкой — что доступно в этом клиенте, решает
-// `planReceiptDelivery` (pdf/receiptDelivery.ts). Сам документ собирается по данным
-// чека (pdf/receipt.ts), поэтому PDF по ссылке не отличается от файла. Точки входа:
-// `shareOrderReceipt()` — кнопка «Чек (PDF)» в карточке заказа, `saveReceiptPdf()` —
-// кнопка «Скачать PDF» на странице чека, `shareReceiptPdfFile()` — её же кнопка
-// «Поделиться» (файлом, а не ссылкой, когда клиент умеет отдавать файлы).
-// Пути одинаковы для iPhone и Android: они зависят от возможностей клиента, а не от
-// названия системы.
+// Чек уходит общей выгрузкой (`reports/delivery.ts`) — так же, как отчёт в xlsx и прайс-лист:
+// в сборке Capacitor файл пишется на устройство и отдаётся системному меню, в мини-приложении
+// Telegram открывается страница «Поделиться» в браузере телефона, в браузере файл скачивается.
+// Сам документ собирается по данным чека (pdf/receipt.ts), поэтому PDF одинаков во всех
+// версиях. Точки входа: `shareOrderReceipt()` — кнопка «Поделиться» в карточке заказа,
+// `saveReceiptPdf()` — кнопка «Скачать PDF» на странице чека, `shareReceiptPdfFile()` — её же
+// кнопка «Поделиться» (файлом, когда клиент его принимает).
 
 import pdfMake from 'pdfmake/build/pdfmake'
 import vfs from 'pdfmake/build/vfs_fonts'
 import { Capacitor } from '@capacitor/core'
 import { Directory, Filesystem } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
+import { deliverReportFile, REPORT_PDF_TYPE, type ReportDeliveryResult } from '../reports/delivery'
 import { insideTelegramWebView } from '../telegram/webapp'
 import {
-  packReceipt,
   receiptData,
   receiptFileName,
   receiptHeading,
-  receiptLinkTooLong,
   receiptMessage,
   receiptTotal,
-  receiptUrl,
-  telegramShareUrl,
   type ReceiptData,
   type ReceiptInput,
 } from './receipt'
-import { canShareFiles, planReceiptDelivery, shareReceiptFile, type ReceiptFileTarget } from './receiptDelivery'
+import { canShareFiles, shareReceiptFile, type ReceiptFileTarget } from './receiptDelivery'
 
 // В pdfmake 0.3.x шрифт Roboto (с кириллицей) подключается через виртуальную ФС.
 pdfMake.addVirtualFileSystem(vfs)
@@ -183,8 +179,8 @@ export async function shareReceiptPdfFile(data: ReceiptData): Promise<ReceiptFil
 }
 
 // Обычное скачивание файла. Работает в браузере; в WebView клиента Telegram (и в
-// мини-приложении, и во встроенном браузере) клиент его игнорирует — там путь доставки
-// выбирает `planReceiptDelivery`.
+// мини-приложении, и во встроенном браузере) клиент его игнорирует — там файл отдаёт
+// страница «Поделиться» (см. `shareOrderReceipt`).
 export async function downloadReceiptPdf(data: ReceiptData): Promise<void> {
   const blob = await pdfMake.createPdf(receiptDocDefinition(data)).getBlob()
   const url = URL.createObjectURL(blob)
@@ -197,47 +193,29 @@ export async function downloadReceiptPdf(data: ReceiptData): Promise<void> {
   URL.revokeObjectURL(url)
 }
 
-// Что в итоге произошло с чеком. Интерфейс говорит об этом текстом: 'link' — ссылку
-// нужно открыть (выбор чата), 'cancelled' — пользователь закрыл меню «Поделиться».
-export type ReceiptDeliveryResult =
-  | { kind: 'native' }
-  | { kind: 'shared' }
-  | { kind: 'downloaded' }
-  | { kind: 'cancelled' }
-  | { kind: 'link'; url: string; text: string; shareUrl: string }
+// Что произошло с чеком: имя собранного файла и исход общей выгрузки — те же данные, что у
+// отчёта и прайс-листа, поэтому подпись под кнопкой собирает одна функция
+// (`describeDelivery` в reports/deliveryResult.ts).
+export interface ReceiptFileResult {
+  fileName: string
+  delivery: ReportDeliveryResult
+}
 
-// Отдаёт чек по завершённому заказу: файлом, ссылкой или системным меню — смотря что
-// умеет клиент. Путь выбирается один раз здесь, поэтому экраны не знают про
-// особенности WebView клиента Telegram и про системные меню.
-export async function shareOrderReceipt(input: ReceiptInput): Promise<ReceiptDeliveryResult> {
+// Отдаёт чек по завершённому заказу. Путь доставки выбирает общая выгрузка, поэтому экран
+// не знает ни про WebView клиента Telegram, ни про системные меню, а поведение совпадает с
+// выгрузкой отчёта и прайс-листа: одна кнопка «Поделиться» на всех трёх местах.
+export async function shareOrderReceipt(input: ReceiptInput): Promise<ReceiptFileResult> {
   const data = receiptData(input)
-  const plan = planReceiptDelivery({
-    native: Capacitor.isNativePlatform(),
-    canShareFiles: canShareFiles(),
-    telegram: insideTelegramWebView(),
+  const fileName = receiptFileName(data)
+  const blob = await pdfMake.createPdf(receiptDocDefinition(data)).getBlob()
+  const delivery = await deliverReportFile({
+    blob,
+    fileName,
+    message: receiptMessage(data),
+    // Тип известен заранее: по нему система и Telegram понимают, что отдают PDF.
+    type: REPORT_PDF_TYPE,
   })
-
-  if (plan === 'native') {
-    await writeAndShareReceiptFile(data)
-    return { kind: 'native' }
-  }
-
-  if (plan === 'file-share') {
-    const target = await shareReceiptPdfFile(data)
-    if (target === 'shared') return { kind: 'shared' }
-    if (target === 'cancelled') return { kind: 'cancelled' }
-    // Клиент обещал поддержку файлов, но отдать не смог — например, системное меню
-    // требует нажатия в том же такте, а PDF собирался асинхронно. Запасной путь —
-    // скачивание: ему нажатие не нужно. В WebView клиента Telegram этот путь не
-    // выполняется: `planReceiptDelivery` отправляет его сразу к ссылке.
-    await downloadReceiptPdf(data)
-    return { kind: 'downloaded' }
-  }
-
-  if (plan === 'link-share') return receiptLink(data)
-
-  await downloadReceiptPdf(data)
-  return { kind: 'downloaded' }
+  return { fileName, delivery }
 }
 
 // Что произошло при сохранении файла на странице чека: 'native' — PDF записан и отдан
@@ -278,17 +256,5 @@ async function writeAndShareReceiptFile(data: ReceiptData): Promise<void> {
     text: receiptMessage(data),
     files: [file.uri],
   })
-}
-
-// Ссылка на чек: данные лежат в самом адресе, поэтому получатель открывает чек и
-// сохраняет PDF у себя. Слишком длинный чек — понятная ошибка, а не обрезанная ссылка.
-async function receiptLink(data: ReceiptData): Promise<ReceiptDeliveryResult> {
-  const payload = await packReceipt(data)
-  const url = receiptUrl(payload)
-  const text = receiptMessage(data)
-  if (receiptLinkTooLong(url, text)) {
-    throw new Error('Чек слишком длинный для ссылки — удалите лишние позиции или сохраните файл')
-  }
-  return { kind: 'link', url, text, shareUrl: telegramShareUrl(url, text) }
 }
 

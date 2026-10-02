@@ -31,8 +31,17 @@ export function describeDelivery(result: ReportDeliveryResult, fileName: string)
         error: 'В этой версии Telegram файл отдать нечем — откройте приложение в браузере.',
       }
     case 'bridge': {
+      if (result.result.kind === 'page') {
+        return {
+          note: 'Открылась страница «Поделиться» — нажмите «Поделиться», чтобы отправить файл, или «Сохранить в файлы».',
+          error: '',
+        }
+      }
       if (result.result.kind === 'opened') {
         return { note: 'Файл уходит в «Загрузки» — его можно открыть или отправить дальше.', error: '' }
+      }
+      if (result.result.kind === 'cancelled') {
+        return { note: 'Отправка отменена — можно попробовать ещё раз.', error: '' }
       }
       if (result.result.kind === 'copied') {
         return { note: 'Ссылка на файл скопирована — откройте её в браузере, чтобы скачать.', error: '' }

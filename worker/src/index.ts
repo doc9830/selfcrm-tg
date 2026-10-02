@@ -10,6 +10,8 @@
 //   POST /telegram/webhook — обновления Telegram (проверка X-Telegram-Bot-Api-Secret-Token);
 //   POST /files            — временный файл (отчёт из мини-приложения) → ссылка на скачивание;
 //   POST /files/<id>/share — «Поделиться»: сообщение с файлом для выбора чата (worker/src/share.ts);
+//   GET  /share/<id>       — страница «Поделиться»: файл уходит системному меню телефона
+//                            (worker/src/sharePage.ts) — её открывает мини-приложение;
 //   GET  /files/<id>       — скачивание временного файла (worker/src/files.ts);
 //   GET  /                 — проверка, что Worker развёрнут (текст, без секретов).
 //
@@ -31,6 +33,7 @@ import { WEBHOOK_PATH } from './config'
 import { handleFiles } from './files'
 import { handleUpdate, type TelegramUpdate } from './handler'
 import { handleReportShare } from './share'
+import { handleSharePage } from './sharePage'
 import type { Deps, Env } from './telegram'
 import { scrub } from './telegram'
 
@@ -51,7 +54,13 @@ export default {
     const share = await handleReportShare(request, env, deps)
     if (share) return share
 
-    // Временные файлы (отчёт в Excel из мини-приложения): отдельный слой, который
+    // Страница «Поделиться» (GET /share/<id>): её открывает мини-приложение в браузере
+    // телефона, а она отдаёт файл системному меню. Тоже раньше файлов и тоже отвечает null
+    // на чужой адрес (worker/src/sharePage.ts).
+    const sharePage = await handleSharePage(request, env)
+    if (sharePage) return sharePage
+
+    // Временные файлы из мини-приложения (отчёт, прайс-лист, чек): отдельный слой, который
     // ничего не знает про Telegram. null означает «адрес не наш» — тогда работают
     // роуты бота ниже.
     const files = await handleFiles(request, env)

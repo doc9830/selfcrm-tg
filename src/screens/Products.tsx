@@ -126,18 +126,14 @@ export function Products() {
       {products.length > 0 && (
         <div className="section" style={{ marginTop: 16 }}>
           {/* Прайс-лист — по всему каталогу, а не по строке поиска: это ответ на вопрос
-              «сколько стоит», его отправляют клиенту целиком. */}
-          <Button
-            variant="outline"
-            icon="download"
-            full
-            disabled={exportBusy}
-            onClick={runPriceListExport}
-          >
-            {exportBusy ? 'Готовим файл…' : 'Прайс-лист в PDF'}
+              «сколько стоит», его отправляют клиенту целиком. Кнопка одна: файл уходит в
+              системное меню, откуда его сохраняют или отправляют (в мини-приложении Telegram
+              для этого открывается страница «Поделиться» в браузере). */}
+          <Button variant="outline" icon="share" full disabled={exportBusy} onClick={runPriceListExport}>
+            {exportBusy ? 'Готовим файл…' : 'Поделиться'}
           </Button>
           <div className="field-hint" style={{ marginTop: 6 }}>
-            Весь каталог одной страницей: товары, услуги и цены — можно отправить клиенту
+            Прайс-лист в PDF одним файлом: товары, услуги и цены — можно отправить клиенту
           </div>
           {exportNote && (
             <div className="field-hint" style={{ marginTop: 6 }}>

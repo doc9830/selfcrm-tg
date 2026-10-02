@@ -158,7 +158,9 @@ export function ReceiptView({ payload, autoDownload = false }: { payload: string
       // Сначала файл: системное меню умеет «Сохранить в файлы» и на iPhone, и на Android —
       // это запасной путь, когда браузер загрузку отклоняет. PDF собирается только если
       // клиент действительно принимает файлы (`canShareFiles`), иначе pdfmake не грузим.
-      if (canShareFiles()) {
+      // Внутри клиента Telegram этот ответ ничего не значит: WebView объявляет Web Share API,
+      // но системного меню не показывает и промис не завершается — там делится ссылка.
+      if (!telegram && canShareFiles()) {
         const { shareReceiptPdfFile } = await import('../pdf/documents')
         const file = await shareReceiptPdfFile(data)
         if (file === 'shared') {

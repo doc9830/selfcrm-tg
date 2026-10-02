@@ -224,6 +224,18 @@ describe('прочие адреса', () => {
   })
 })
 
+describe('GET /share/<id>', () => {
+  it('доходит до страницы «Поделиться», а не до роутов бота', async () => {
+    // Без привязки KV страница отвечает 503, а роуты бота на этот адрес — 404: по ответу
+    // видно, что запрос разобрал слой страницы (worker/src/sharePage.ts).
+    const response = await worker.fetch(
+      new Request(`https://selfcrm-bot.example.workers.dev/share/${'A'.repeat(22)}`),
+      env,
+    )
+    expect(response.status).toBe(503)
+  })
+})
+
 describe('POST /files/<id>/share', () => {
   it('доходит до слоя «Поделиться», а не до слоя файлов: без подписи — 403', async () => {
     // Путь начинается так же, как у файлов, поэтому важно, что запрос перехватывает именно

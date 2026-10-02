@@ -2,11 +2,9 @@ import { useRef, useState } from 'react'
 import { Button, Card, EmptyState, Field, Input, Modal, MoneyInput, Select, Textarea, blockNonNumericKeys, cx } from '../components/ui'
 import { Icon } from '../components/Icons'
 import { SuggestField, type SuggestOption } from '../components/SuggestField'
-import { receiptDownloadUrl } from '../pdf/receipt'
-import { copyReceiptLink, shareReceiptLink } from '../pdf/receiptDelivery'
+import { describeDelivery } from '../reports/deliveryResult'
 import { useRoute } from '../router'
 import { useData } from '../state/DataContext'
-import { openExternalLink } from '../telegram/webapp'
 import {
   ORDER_STATUSES,
   ORDER_STATUS_LABEL,
@@ -20,6 +18,7 @@ import {
   type ReminderKind,
 } from '../types'
 import { fromDateInput, toDateInput } from '../utils/dates'
+import { humanErrorMessage } from '../utils/errors'
 import { formatDate, formatShortDate, marginHint, money } from '../utils/format'
 import { repeatOrderLink } from '../utils/links'
 import { applyOrderForm, canRepeatOrder, orderHeading, orderTitle } from '../utils/orders'
@@ -65,10 +64,8 @@ export function OrderDetail({
   const [editing, setEditing] = useState(isNew)
   const [pdfBusy, setPdfBusy] = useState(false)
   const [pdfError, setPdfError] = useState('')
-  // Что произошло с чеком, отправленным ссылкой: заметка об успехе и сама ссылка — из
-  // неё собирается запасная кнопка «Скопировать ссылку».
+  // Что произошло с чеком: исход общей выгрузки объясняется текстом под кнопкой.
   const [pdfNote, setPdfNote] = useState('')
-  const [pdfLink, setPdfLink] = useState<{ url: string; text: string } | null>(null)
   // Окно «Добавить оплату» — состояние хука выше ранних выходов (правила хуков).
   const [paymentOpen, setPaymentOpen] = useState(false)
   // Окно создания напоминания — по тем же причинам тоже до ранних выходов.
@@ -371,14 +368,13 @@ export function OrderDetail({
         <div style={{ marginTop: 16 }}>
           <Button
             variant="primary"
-            icon="doc"
+            icon="share"
             full
             disabled={pdfBusy}
             onClick={() => {
               setPdfBusy(true)
               setPdfError('')
               setPdfNote('')
-              setPdfLink(null)
               void import('../pdf/documents')
                 .then(({ shareOrderReceipt }) =>
                   shareOrderReceipt({
@@ -387,47 +383,25 @@ export function OrderDetail({
                     contractor: db.getSettings().contractor ?? emptyContractor(),
                   }),
                 )
-                .then(async (result) => {
-                  // В WebView клиента Telegram файл отдать нельзя: клиент не сохраняет
-                  // blob и не показывает blob-ссылки, а `WebApp.downloadFile` принимает
-                  // только адреса https: — поэтому вместо PDF уходит ссылка на страницу
-                  // чека. Выбор чата открывает сам клиент Telegram (`t.me/share/url`); если
-                  // открыть не удалось, ссылка ложится в буфер обмена, а под кнопкой
-                  // остаётся «Скопировать ссылку» — тупика «ничего не произошло» нет.
-                  //
-                  // Остальные исходы — файл: системное меню (на iPhone и Android оно
-                  // однотипно), запись в сборке Capacitor или скачивание браузером.
-                  if (result.kind === 'shared' || result.kind === 'native') {
-                    setPdfNote('PDF готов — выберите, куда его сохранить или отправить.')
-                    return
-                  }
-                  if (result.kind === 'downloaded') {
-                    setPdfNote('PDF скачан в «Загрузки». Чтобы отправить его клиенту, приложите файл в чат.')
-                    return
-                  }
-                  if (result.kind === 'cancelled') {
-                    setPdfNote('Отправка отменена — можно попробовать ещё раз.')
-                    return
-                  }
-                  if (result.kind !== 'link') return
-                  setPdfLink({ url: result.url, text: result.text })
-                  const target = await shareReceiptLink(result.url, result.text)
-                  if (target === 'opened')
-                    setPdfNote('Выберите чат в Telegram — ссылка на чек уже готова. Скачать сам PDF можно кнопкой ниже.')
-                  else if (target === 'copied')
-                    setPdfNote('Ссылка на чек скопирована — вставьте её в нужный чат, а PDF скачайте кнопкой ниже.')
-                  else setPdfError('Не удалось открыть выбор чата — скопируйте ссылку кнопкой ниже')
+                .then(({ fileName, delivery }) => {
+                  // Исход у чека тот же, что у отчёта и прайс-листа: подпись собирает общая
+                  // функция, поэтому одинаковые случаи объясняются одинаково.
+                  const text = describeDelivery(delivery, fileName)
+                  setPdfNote(text.note)
+                  setPdfError(text.error)
                 })
-                .catch((e) => {
-                  setPdfError(e instanceof Error ? e.message : 'Не удалось сформировать чек')
+                .catch((error) => {
+                  setPdfError(
+                    humanErrorMessage(error, 'Не удалось сформировать чек — попробуйте ещё раз.'),
+                  )
                 })
                 .finally(() => setPdfBusy(false))
             }}
           >
-            {pdfBusy ? 'Формирование…' : 'Чек (PDF)'}
+            {pdfBusy ? 'Формирование…' : 'Поделиться'}
           </Button>
           <div className="field-hint" style={{ marginTop: 6 }}>
-            Чек уходит файлом или ссылкой — как умеет приложение, через которое вы работаете.
+            Чек уходит PDF-файлом: в системном окне выберите, куда его отправить или сохранить
           </div>
           {pdfError && (
             <div className="field-error" style={{ marginTop: 6 }}>
@@ -438,55 +412,6 @@ export function OrderDetail({
             <div className="field-hint" style={{ marginTop: 6 }}>
               {pdfNote}
             </div>
-          )}
-          {pdfLink && (
-            <>
-              {/* Ссылку на чек клиент Telegram открывает сам, а вот файл страница отдаёт
-                  только в браузере: кнопка открывает чек там — с признаком dl=1, по
-                  которому PDF скачивается сразу. На iPhone и iPad кнопка тоже полезна:
-                  она открывает чек в браузере, где файл забирают через «Поделиться»
-                  (см. `isIosClient()` в `pdf/receiptDelivery.ts`). */}
-              <Button
-                variant="secondary"
-                size="sm"
-                icon="download"
-                full
-                style={{ marginTop: 8 }}
-                onClick={() => {
-                  if (!pdfLink) return
-                  const target = openExternalLink(receiptDownloadUrl(pdfLink.url))
-                  if (target === 'failed') {
-                    setPdfNote('')
-                    setPdfError('Не удалось открыть браузер — скопируйте ссылку кнопкой ниже')
-                  } else {
-                    setPdfError('')
-                    setPdfNote('Чек открывается в браузере — там PDF сохранится как обычный файл.')
-                  }
-                }}
-              >
-                Скачать PDF
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                icon="link"
-                full
-                style={{ marginTop: 8 }}
-                onClick={() => {
-                  if (!pdfLink) return
-                  void copyReceiptLink(pdfLink.url, pdfLink.text).then((copied) => {
-                    if (copied) {
-                      setPdfError('')
-                      setPdfNote('Ссылка на чек скопирована — вставьте её в нужный чат.')
-                    } else {
-                      setPdfError('Не удалось скопировать ссылку — откройте чек и скопируйте адрес из строки браузера')
-                    }
-                  })
-                }}
-              >
-                Скопировать ссылку
-              </Button>
-            </>
           )}
         </div>
       )}

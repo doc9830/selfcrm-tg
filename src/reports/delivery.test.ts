@@ -5,10 +5,9 @@ import {
   planReportDelivery,
   registerReportFileBridge,
   reportFileBridge,
-  shareReportAvailable,
-  shareReportFile,
   type ReportBridgeResult,
   type ReportFileBridge,
+  type ReportFileInput,
 } from './delivery'
 
 afterEach(() => {
@@ -49,7 +48,7 @@ describe('мост платформы', () => {
   })
 
   it('получает файл отчёта целиком и возвращает исход', async () => {
-    const sent: Array<{ blob: Blob; fileName: string; message: string }> = []
+    const sent: ReportFileInput[] = []
     const result: ReportBridgeResult = { kind: 'copied', url: 'https://example.com/file.xlsx' }
     registerReportFileBridge({
       send: async (file) => {
@@ -69,68 +68,27 @@ describe('мост платформы', () => {
     expect(sent[0].blob).toBe(blob)
     expect(sent[0].fileName).toBe('SelfCRM_Отчет_Все_время.xlsx')
     expect(sent[0].message).toBe('Отчёт SelfCRM: за всё время')
-  })
-})
-
-describe('«Поделиться» файлом', () => {
-  it('без моста или без пути «Поделиться» делиться нечем', async () => {
-    expect(shareReportAvailable()).toBe(false)
-    expect(await shareReportFile({ blob, fileName: 'report.xlsx', message: 'Отчёт' })).toEqual({
-      kind: 'unavailable',
-    })
-
-    // Мост умеет только выгрузку — этого мало: делиться файлом он не берётся.
-    registerReportFileBridge({ send: async () => ({ kind: 'opened', url: null }) })
-    expect(shareReportAvailable()).toBe(false)
-    expect(await shareReportFile({ blob, fileName: 'report.xlsx', message: 'Отчёт' })).toEqual({
-      kind: 'unavailable',
-    })
+    // Тип известен до моста: у отчёта — таблица, у прайс-листа и чека — PDF.
+    expect(sent[0].type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
   })
 
-  it('мост, умеющий делиться, получает файл и отдаёт свой исход', async () => {
-    const sent: Array<{ fileName: string; message: string }> = []
+  it('тип файла доходит до моста и у документа', async () => {
+    const sent: ReportFileInput[] = []
     registerReportFileBridge({
-      send: async () => ({ kind: 'opened', url: null }),
-      share: async (file) => {
-        sent.push({ fileName: file.fileName, message: file.message })
-        return { kind: 'sent' }
+      send: async (file) => {
+        sent.push(file)
+        return { kind: 'page', url: 'https://worker.test/share/abc' }
       },
     })
 
-    expect(shareReportAvailable()).toBe(true)
-    const result = await shareReportFile({
+    await deliverReportFile({
       blob,
-      fileName: 'SelfCRM_Отчет_Все_время.xlsx',
-      message: 'Отчёт SelfCRM: за всё время',
+      fileName: 'Чек_42.pdf',
+      message: 'Чек по заказу №42',
+      type: 'application/pdf',
     })
 
-    expect(result).toEqual({ kind: 'sent' })
-    expect(sent).toEqual([
-      { fileName: 'SelfCRM_Отчет_Все_время.xlsx', message: 'Отчёт SelfCRM: за всё время' },
-    ])
-  })
-
-  it('выгрузка не подменяется «Поделиться»: у кнопок разные пути', async () => {
-    const calls: string[] = []
-    registerReportFileBridge({
-      send: async () => {
-        calls.push('send')
-        return { kind: 'opened', url: 'https://worker.test/files/abc' }
-      },
-      share: async () => {
-        calls.push('share')
-        return { kind: 'sent' }
-      },
-    })
-
-    const delivery = await deliverReportFile({
-      blob,
-      fileName: 'report.xlsx',
-      message: 'Отчёт',
-    })
-
-    expect(delivery.kind).toBe('bridge')
-    expect(calls).toEqual(['send'])
+    expect(sent[0].type).toBe('application/pdf')
   })
 })
 

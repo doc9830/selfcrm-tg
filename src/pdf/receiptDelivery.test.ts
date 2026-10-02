@@ -10,7 +10,6 @@ import {
   canShareFiles,
   copyReceiptLink,
   isIosClient,
-  planReceiptDelivery,
   shareReceiptFile,
   shareReceiptLink,
 } from './receiptDelivery'
@@ -39,43 +38,6 @@ function stubWindow(webApp?: Partial<TelegramWebApp>, extra: Record<string, unkn
 function stubNavigator(value: unknown) {
   vi.stubGlobal('navigator', value)
 }
-
-describe('выбор способа доставки', () => {
-  it('в Android-сборке файл пишется на устройство', () => {
-    expect(planReceiptDelivery({ native: true, canShareFiles: false, telegram: false })).toBe('native')
-  })
-
-  it('там, где клиент умеет делиться файлом, уходит файл', () => {
-    expect(planReceiptDelivery({ native: false, canShareFiles: true, telegram: false })).toBe(
-      'file-share',
-    )
-  })
-
-  it('в Telegram ссылка важнее файла, даже если WebView обещает canShare', () => {
-    // WebView клиента (так ведёт себя, например, Android) объявляет и `navigator.share`, и
-    // `canShare` для PDF, но системного меню у него нет: нажатие «Чек (PDF)» не делало
-    // ничего. Клиент Telegram умеет открыть выбор чата по ссылке — этот путь и выбирается.
-    expect(planReceiptDelivery({ native: false, canShareFiles: true, telegram: true })).toBe(
-      'link-share',
-    )
-    // Нативная сборка важнее всего: там файл пишется на устройство.
-    expect(planReceiptDelivery({ native: true, canShareFiles: true, telegram: true })).toBe('native')
-  })
-
-  it('в Telegram Mini App без файлов уходит ссылка', () => {
-    // Клиент Telegram не сохраняет blob и не показывает blob-ссылки, поэтому
-    // единственный рабочий путь — адрес страницы чека. Путь один для iPhone и Android.
-    expect(planReceiptDelivery({ native: false, canShareFiles: false, telegram: true })).toBe(
-      'link-share',
-    )
-  })
-
-  it('в обычном браузере файл просто скачивается', () => {
-    expect(planReceiptDelivery({ native: false, canShareFiles: false, telegram: false })).toBe(
-      'file-download',
-    )
-  })
-})
 
 describe('canShareFiles', () => {
   it('без navigator или File файлы недоступны', () => {

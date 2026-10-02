@@ -14,11 +14,11 @@
 // `planReportDelivery`, поэтому оно одинаково во всех версиях приложения и
 // проверяется тестами.
 //
-// В мини-приложении Telegram у выгрузки есть второй путь — «Поделиться»: файл уходит
-// документом в чат, который выберет пользователь (родное меню клиента). Он не заменяет
-// выгрузку, а живёт рядом с ней: `shareReportFile` пользуется тем же мостом и возвращает
-// свой исход, потому что вопросы у пользователя разные — «сохранить себе» и «отправить
-// клиенту» (см. `shareReportAvailable`).
+// В мини-приложении Telegram файл отдаёт страница «Поделиться»: выгрузка открывает её в
+// браузере телефона, а страница кладёт файл в системное меню (`navigator.share`) — оттуда
+// его сохраняют в «Файлы» или отправляют в мессенджер. Так выгрузка одинакова во всех
+// версиях приложения: в сборке Capacitor системное меню открывает плагин, здесь — браузер
+// (worker/src/sharePage.ts и src/telegram/files.ts).
 import { Capacitor } from '@capacitor/core'
 import { Directory, Filesystem } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
@@ -47,9 +47,18 @@ export function planReportDelivery(env: ReportDeliveryEnv): ReportDeliveryPlan {
   return 'file-download'
 }
 
-// Куда попала ссылка на файл в мини-приложении Telegram: клиент открыл её сам или
-// она легла в буфер обмена, либо отдать файл не удалось вовсе.
-export type ReportBridgeResult = { kind: 'opened' | 'copied' | 'failed'; url: string | null }
+// Куда попал готовый файл в мини-приложении Telegram:
+//   'page' — открылась страница «Поделиться» в браузере телефона: там системное меню
+//            открывает сама страница, и файл оттуда сохраняют или отправляют (основной путь);
+//   'opened' — файл отдал сам клиент Telegram (родное меню выбора чата или скачивание);
+//   'cancelled' — пользователь закрыл меню клиента сам: это не сбой;
+//   'copied' — ссылка на файл легла в буфер обмена;
+//   'failed' — отдать файл не удалось вовсе. Экран объясняет исход текстом, поэтому
+//            значения не смешиваются.
+export type ReportBridgeResult = {
+  kind: 'page' | 'opened' | 'cancelled' | 'copied' | 'failed'
+  url: string | null
+}
 
 // Куда попало «Поделиться» файлом: 'sent' — файл ушёл документом в выбранный чат, 'link' —
 // файл отдать не вышло и ушла ссылка на него, 'cancelled' — меню закрыли, 'expired' —
@@ -62,11 +71,11 @@ export type ReportShareResult = {
 // Мост платформы: превращает готовый файл в то, что умеет клиент. В мини-приложении
 // Telegram это загрузка во временное хранилище и выдача ссылки (src/telegram/files.ts).
 export interface ReportFileBridge {
-  send(file: { blob: Blob; fileName: string; message: string }): Promise<ReportBridgeResult>
-  // Поделиться файлом отдельным действием. Есть только там, где выгрузка отдаёт файл не
-  // сразу в чат: в мини-приложении Telegram это родное меню выбора чата
-  // (`WebApp.shareMessage`, см. src/telegram/files.ts). В браузере и Android-сборке такого
-  // пути нет — там системное меню открывается уже при выгрузке, и второй кнопки не нужно.
+  send(file: ReportFileInput): Promise<ReportBridgeResult>
+  // Отдать файл документом в выбранный чат — запасной шаг выгрузки. Есть только там, где
+  // родное меню чата умеет отдавать файл: в мини-приложении Telegram это `WebApp.shareMessage`
+  // (см. src/telegram/files.ts). В браузере и Android-сборке такого пути нет — там системное
+  // меню открывается уже при выгрузке.
   share?(file: ReportFileInput): Promise<ReportShareResult>
 }
 
@@ -115,7 +124,9 @@ export async function deliverReportFile(input: ReportFileInput): Promise<ReportD
   if (plan === 'bridge') {
     const bridge = platformBridge
     if (!bridge) return { kind: 'unsupported' }
-    return { kind: 'bridge', result: await bridge.send(input) }
+    // Тип передаётся мосту вычисленным: по нему Worker понимает, что за файл отдаёт, — а
+    // от этого зависит, чем файл считает системное меню (см. src/telegram/files.ts).
+    return { kind: 'bridge', result: await bridge.send({ ...input, type }) }
   }
 
   if (plan === 'native') {
@@ -136,22 +147,6 @@ export async function deliverReportFile(input: ReportFileInput): Promise<ReportD
 
   downloadReportFile(input.blob, input.fileName)
   return { kind: 'downloaded' }
-}
-
-// Можно ли поделиться файлом отдельным действием. Кнопка «Поделиться» показывается только
-// тогда, когда такой путь есть у платформы: в мини-приложении Telegram — есть, в браузере и
-// Android-сборке — нет (там файл уходит системным меню уже при выгрузке).
-export function shareReportAvailable(): boolean {
-  return typeof platformBridge?.share === 'function'
-}
-
-// Отдаёт готовый отчёт в выбор чата. Выбор пути — здесь, поэтому экран статистики не знает
-// ни про WebView клиента Telegram, ни про его методы; 'unavailable' означает, что делиться
-// нечем (нет моста или платформа такого пути не имеет).
-export async function shareReportFile(input: ReportFileInput): Promise<ReportShareResult> {
-  const bridge = platformBridge
-  if (!bridge || typeof bridge.share !== 'function') return { kind: 'unavailable' }
-  return bridge.share(input)
 }
 
 // Поддержка «Поделиться с файлом» проверяется пробным файлом: `canShare` отвечает

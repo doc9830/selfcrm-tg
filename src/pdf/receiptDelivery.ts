@@ -1,50 +1,22 @@
-// Как отдать чек: файлом или ссылкой.
+// Что страница чека умеет с файлом: отдать его системному меню или сослаться на сам чек.
 //
-// Выбор зависит не от желания, а от возможностей клиента, и он одинаков для iPhone и
-// Android: решает не название системы, а то, что клиент умеет. Порядок один:
-//   1. 'native' — сборка Capacitor: файл пишется на устройство и уходит системным меню
-//      «Поделиться» (плагин Share работает и на Android, и на iOS);
-//   2. 'link-share' — WebView клиента Telegram: файл со страницы отдать нечем (клиент
-//      игнорирует и blob-ссылки, и `<a download>`, а `WebApp.downloadFile` принимает
-//      только адреса `https:`), поэтому чек уходит ссылкой — получатель открывает её и
-//      сохраняет PDF;
-//   3. 'file-share' — клиент умеет `navigator.share` с файлами (проверка пробным PDF):
-//      в системное меню уходит сам файл;
-//   4. 'file-download' — обычное скачивание файла браузером.
+// Путь доставки чека из карточки заказа выбирает общая выгрузка (`reports/delivery.ts`) —
+// так же, как для отчёта в xlsx и прайс-листа. Здесь остаётся то, что нужно странице чека:
+// её открывает получатель по ссылке, где нет ни моста платформы, ни экранов приложения.
 //
-// Само правило выбора — чистая функция: её проверяют тесты, а `documents.ts` только
-// выполняет выбранный план.
+//   • `canShareFiles()` — клиент принимает файлы (проверка пробным PDF);
+//   • `shareReceiptFile()` — кладёт PDF в системное меню «Поделиться»;
+//   • `shareReceiptLink()` / `copyReceiptLink()` — ссылка на чек: её открывает клиент
+//     Telegram (`t.me/share/url`) или системное меню браузера;
+//   • `isIosClient()` — на iPhone и iPad файл из страницы не скачивается: там остаётся одна
+//     кнопка «Поделиться» (см. `screens/ReceiptView.tsx`).
 //
-// Telegram проверяется раньше Web Share API намеренно. В WebView клиента
-// `navigator.share` и `navigator.canShare` объявлены и на пробный PDF отвечают «да», но
-// системного меню у WebView нет: промис не завершается, и нажатие «Чек (PDF)» выглядело
-// как «ничего не произошло». Ссылку же открывает сам клиент Telegram (`t.me/share/url` →
-// выбор чата) — этот путь одинаков на iPhone и Android.
+// Telegram проверяется раньше Web Share API намеренно. В WebView клиента `navigator.share` и
+// `navigator.canShare` объявлены и на пробный PDF отвечают «да», но системного меню у WebView
+// нет: промис не завершается, и нажатие выглядело как «ничего не произошло». Поэтому
+// вызывающий сначала спрашивает `insideTelegramWebView()`, а уже потом собирает файл.
 import { insideTelegramWebView, openExternalLink } from '../telegram/webapp'
 import { telegramShareUrl } from './receipt'
-
-export interface ReceiptDeliveryEnv {
-  // Приложение собрано под нативную платформу (Capacitor): файл можно записать на
-  // устройство. Плагины Filesystem и Share работают и на Android, и на iOS.
-  native: boolean
-  // Клиент умеет делиться файлом (Web Share API с файлами). Спрашивать об этом имеет
-  // смысл только вне WebView клиента Telegram: там ответ «да» ничего не значит — меню
-  // всё равно не открывается.
-  canShareFiles: boolean
-  // Открыто внутри WebView клиента Telegram: мини-приложение или его встроенный браузер.
-  telegram: boolean
-}
-
-export type ReceiptDeliveryPlan = 'native' | 'file-share' | 'link-share' | 'file-download'
-
-// Порядок веток — от самой удобной доставки к самой простой; Telegram стоит раньше
-// файлов, потому что в мини-приложении файл отдать нечем (см. выше).
-export function planReceiptDelivery(env: ReceiptDeliveryEnv): ReceiptDeliveryPlan {
-  if (env.native) return 'native'
-  if (env.telegram) return 'link-share'
-  if (env.canShareFiles) return 'file-share'
-  return 'file-download'
-}
 
 // Поддержка «Поделиться с файлом» проверяется пробным файлом: `canShare` отвечает
 // не по названию платформы, а по факту — умеет ли клиент отдать именно PDF. В
@@ -127,7 +99,7 @@ export async function shareReceiptLink(url: string, text: string): Promise<Recei
 
 // Копия ссылки на чек в буфер обмена. Нужна и как запасной путь в `shareReceiptLink`,
 // и как отдельное действие: если выбор чата не открылся, ссылку вставляют в сообщение
-// руками — иначе нажатие «Чек (PDF)» заканчивается ничем.
+// руками — иначе нажатие «Поделиться» на странице чека заканчивается ничем.
 export function copyReceiptLink(url: string, text: string): Promise<boolean> {
   return copyTextToClipboard(`${text}\n${url}`)
 }

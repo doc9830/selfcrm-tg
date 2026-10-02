@@ -13,8 +13,9 @@ vi.mock('../telegram/webapp', () => ({
 }))
 
 import { emptyContractor, type Client, type Order } from '../types'
-import { receiptDocDefinition, saveReceiptPdf, shareReceiptPdfFile } from './documents'
-import { receiptData } from './receipt'
+import { registerReportFileBridge, type ReportFileInput } from '../reports/delivery'
+import { receiptDocDefinition, saveReceiptPdf, shareOrderReceipt, shareReceiptPdfFile } from './documents'
+import { receiptData, receiptFileName, receiptMessage } from './receipt'
 
 afterEach(() => {
   // Проверки файловой отправки подменяют глобальные `navigator`/`File`: возвращаем их
@@ -168,5 +169,38 @@ describe('отправка чека файлом', () => {
     expect(await shareReceiptPdfFile(receiptData({ order: makeOrder(), client, contractor }))).toBe(
       'unavailable',
     )
+  })
+})
+
+describe('чек уходит общей выгрузкой', () => {
+  it('собирает PDF и отдаёт его доставке с типом PDF', async () => {
+    // Карточка заказа не выбирает путь сама: файл уходит туда же, куда отчёт и прайс-лист
+    // (в мини-приложении Telegram — страница «Поделиться»). Здесь мост подменяется
+    // заглушкой: проверяется то, что получает экран — имя файла и исход доставки.
+    const sent: ReportFileInput[] = []
+    registerReportFileBridge({
+      send: async (file) => {
+        sent.push(file)
+        return { kind: 'page', url: 'https://worker.test/share/abc' }
+      },
+    })
+
+    const order = makeOrder()
+    const data = receiptData({ order, client, contractor })
+
+    const { fileName, delivery } = await shareOrderReceipt({ order, client, contractor })
+
+    registerReportFileBridge(null)
+
+    expect(fileName).toBe(receiptFileName(data))
+    expect(delivery).toEqual({
+      kind: 'bridge',
+      result: { kind: 'page', url: 'https://worker.test/share/abc' },
+    })
+    expect(sent).toHaveLength(1)
+    expect(sent[0].fileName).toBe(fileName)
+    expect(sent[0].message).toBe(receiptMessage(data))
+    // Тип известен заранее: по нему системное меню понимает, что отдаёт PDF, а не таблицу.
+    expect(sent[0].type).toBe('application/pdf')
   })
 })

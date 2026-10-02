@@ -12,6 +12,7 @@ import {
   registerTelegramReportFiles,
   reportFileBridge as bridge,
   reportFilesUrl,
+  reportSharePageUrl,
   uploadReportFile,
 } from './files'
 import type { TelegramEventPayload, TelegramWebApp } from './webapp'
@@ -93,6 +94,21 @@ describe('адрес выгрузки', () => {
   it('ведёт на слой файлов Worker', () => {
     expect(reportFilesUrl()).toMatch(/^https:\/\/.+\/files$/)
   })
+
+  it('страница «Поделиться» живёт на домене файла', () => {
+    // Браузер отдаёт системному меню только файл своего источника, поэтому файл и страница
+    // отличаются лишь путём: `/files/<id>` и `/share/<id>`.
+    const page = new URL(reportSharePageUrl(FILE_ID))
+    expect(page.origin).toBe(new URL(reportFilesUrl()).origin)
+    expect(page.pathname).toBe(`/share/${FILE_ID}`)
+  })
+
+  it('подпись файла едет в адресе страницы', () => {
+    const page = new URL(reportSharePageUrl(FILE_ID, 'Прайс-лист SelfCRM'))
+    expect(page.searchParams.get('text')).toBe('Прайс-лист SelfCRM')
+    // Пустая подпись не оставляет пустого параметра.
+    expect(reportSharePageUrl(FILE_ID, '   ')).not.toContain('?')
+  })
 })
 
 describe('загрузка файла во временное хранилище', () => {
@@ -109,6 +125,17 @@ describe('загрузка файла во временное хранилище
     const headers = requests[0].init?.headers as Record<string, string>
     expect(headers['X-File-Name']).toBe(encodeURIComponent(FILE_NAME))
     expect(headers['Content-Type']).toContain('spreadsheetml')
+  })
+
+  it('PDF уходит заголовком PDF, а не таблицы', async () => {
+    // Тип важен: по нему Worker подписывает файл, а системное меню показывает получателю,
+    // что за файл ему передали.
+    const requests = stubFetch(() => uploadedResponse())
+
+    await uploadReportFile(new Blob(['%PDF']), 'Чек_42.pdf', 'application/pdf')
+
+    const headers = requests[0].init?.headers as Record<string, string>
+    expect(headers['Content-Type']).toBe('application/pdf')
   })
 
   it('слишком большой файл не отправляется', async () => {
@@ -147,27 +174,10 @@ describe('загрузка файла во временное хранилище
 })
 
 
-describe('мост: файл → ссылка → клиент Telegram', () => {
-  it('клиент скачивает файл сам (downloadFile)', async () => {
-    const calls: Array<{ url: string; file_name: string }> = []
-    stubTelegramWindow({
-      downloadFile: (params) => {
-        calls.push(params)
-      },
-    })
-    stubFetch(() => uploadedResponse())
-
-    const result = await bridge.send({
-      blob: new Blob(['xlsx']),
-      fileName: FILE_NAME,
-      message: 'Отчёт',
-    })
-
-    expect(result).toEqual({ kind: 'opened', url: FILE_URL })
-    expect(calls).toEqual([{ url: FILE_URL, file_name: FILE_NAME }])
-  })
-
-  it('старый клиент открывает ссылку браузером', async () => {
+describe('мост: файл → ссылка → страница «Поделиться»', () => {
+  it('основной путь: страница «Поделиться» открывается в браузере', async () => {
+    // Так выгрузка идёт всегда, когда клиент умеет открывать внешние ссылки: страница
+    // отдаёт файл системному меню телефона — тому же, что открывает Android-сборка.
     const opened: string[] = []
     stubTelegramWindow({
       openLink: (url) => {
@@ -179,14 +189,61 @@ describe('мост: файл → ссылка → клиент Telegram', () => 
     const result = await bridge.send({
       blob: new Blob(['xlsx']),
       fileName: FILE_NAME,
-      message: 'Отчёт',
+      message: 'Отчёт SelfCRM',
     })
 
-    expect(result.kind).toBe('opened')
-    expect(opened).toEqual([FILE_URL])
+    expect(result).toEqual({ kind: 'page', url: FILE_URL })
+    expect(opened).toHaveLength(1)
+    const page = new URL(opened[0])
+    // Страница живёт на том же домене, что и файл, — иначе браузер не отдаст файл меню.
+    expect(page.pathname).toBe(`/share/${FILE_ID}`)
+    expect(page.searchParams.get('text')).toBe('Отчёт SelfCRM')
   })
 
-  it('если ссылку открыть нечем, она ложится в буфер обмена', async () => {
+  it('браузер открыть нечем — файл уходит документом в выбранный чат', async () => {
+    // Запасной путь: родное меню клиента Telegram (то же, что раньше открывала вторая
+    // кнопка). До него дело доходит только при отказе браузера.
+    const shared: string[] = []
+    stubTelegramWindow({
+      shareMessage: (msgId, callback) => {
+        shared.push(msgId)
+        callback?.(true)
+      },
+    })
+    stubWorker()
+
+    const result = await bridge.send({
+      blob: new Blob(['xlsx']),
+      fileName: FILE_NAME,
+      message: 'Отчёт SelfCRM',
+    })
+
+    expect(result).toEqual({ kind: 'opened', url: FILE_URL })
+    expect(shared).toEqual(['prepared-1'])
+  })
+
+  it('меню чата недоступно — файл сохраняет сам клиент', async () => {
+    // Загрузка и подготовка сообщения прошли, а отправлять клиент не умеет: тогда файл
+    // сохраняет он же, своим методом скачивания (Bot API 8.0+).
+    const calls: Array<{ url: string; file_name: string }> = []
+    stubTelegramWindow({
+      downloadFile: (params) => {
+        calls.push(params)
+      },
+    })
+    stubWorker()
+
+    const result = await bridge.send({
+      blob: new Blob(['xlsx']),
+      fileName: FILE_NAME,
+      message: 'Отчёт SelfCRM',
+    })
+
+    expect(result).toEqual({ kind: 'opened', url: FILE_URL })
+    expect(calls).toEqual([{ url: FILE_URL, file_name: FILE_NAME }])
+  })
+
+  it('если ничего не вышло, ссылка ложится в буфер обмена', async () => {
     const copied: string[] = []
     stubTelegramWindow({})
     stubFetch(() => uploadedResponse())

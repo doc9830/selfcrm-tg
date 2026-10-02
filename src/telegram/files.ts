@@ -1,25 +1,24 @@
-// Отчёт в Excel в мини-приложении: файл уходит временной ссылкой.
+// Выгрузка файла в мини-приложении: файл уходит системному меню браузера телефона.
 //
 // В WebView клиента Telegram файл со страницы отдать нечем: клиент игнорирует и
 // blob-ссылки, и `<a download>`, а `WebApp.downloadFile` принимает только адреса
-// `https:`. Поэтому отчёт идёт по тому же пути, что и чек (ссылка вместо файла), но
-// в отличие от чека данные в адрес не помещаются — в отчёте все заказы, позиции,
-// клиенты и товары. Значит, файл должен где-то полежать:
+// `https:`. А выгрузить нужно то, что в адрес не помещается (отчёт: все заказы,
+// позиции, клиенты и товары). Поэтому файл должен где-то полежать:
 //
 //   SelfCRM (мини-приложение) → POST /files на Worker бота → временное хранилище (KV)
 //      ↓ ссылка https://<worker>/files/<случайный id>
-//   WebApp.downloadFile(url) — клиент сохраняет файл; если метод недоступен —
-//   openLink(url) — файл скачает встроенный браузер; иначе ссылка в буфер обмена
+//   WebApp.openLink(https://<worker>/share/<id>) — браузер телефона открывает страницу
+//   «Поделиться»: она отдаёт файл системному меню (`navigator.share`), откуда его
+//   сохраняют в «Файлы» или отправляют в мессенджер (worker/src/sharePage.ts)
 //
 // Тот же Worker, что принимает webhook бота: отдельного сервера и второй
 // инфраструктуры нет. Данные CRM на сервере не живут — KV хранит только переданный
 // файл, час, под случайным именем (см. worker/src/files.ts).
 //
-// Кнопка «Поделиться» идёт дальше выгрузки: файл уходит документом в чат, который выберет
-// пользователь. Сообщение с файлом собирает Worker (`savePreparedInlineMessage`), а меню
-// выбора чата открывает сам клиент (`WebApp.shareMessage`, Bot API 8.0+) — подробности в
-// worker/src/share.ts. Если клиент отправлять сообщения не умеет, остаётся прежний путь
-// чека: выбор чата открывается ссылкой `t.me/share/url`, только уходит ссылка, а не файл.
+// Пути по убыванию удобства: страница «Поделиться» в браузере → родное меню выбора чата
+// Telegram → скачивание клиентом → ссылка в буфер обмена (см. `reportFileBridge`). Так
+// выгрузка одинакова во всех версиях приложения: в сборке Capacitor системное меню
+// открывает плагин, здесь — браузер, а сам файл собирает приложение.
 import {
   registerReportFileBridge,
   REPORT_XLSX_TYPE,
@@ -51,14 +50,26 @@ const MAX_REPORT_BYTES = 8 * 1024 * 1024
 
 const FILE_NAME_HEADER = 'X-File-Name'
 
-// Путь слоя файлов на Worker'е: приём и выдача отчёта. «Поделиться» — тот же путь плюс
-// идентификатор файла и `/share` (см. worker/src/share.ts).
+// Путь слоя файлов на Worker'е: приём и выдача выгруженного файла (отчёт, прайс-лист, чек).
+// «Поделиться» — тот же путь плюс идентификатор файла и `/share` (см. worker/src/share.ts).
 const FILES_PATH = '/files'
+
+// Путь страницы «Поделиться» на Worker'е: её открывает браузер телефона, а она отдаёт файл
+// системному меню (`navigator.share`). Страница живёт на том же домене, что и файл, — так
+// браузер отдаёт системному меню файл своего источника (worker/src/sharePage.ts).
+const SHARE_PAGE_PATH = '/share'
 
 export function reportFilesUrl(): string {
   return `${WORKER_URL}${FILES_PATH}`
 }
 
+// Адрес страницы «Поделиться» для загруженного файла. Подпись файла едет подсказкой: её
+// страница показывает получателю и подставляет в системное меню.
+export function reportSharePageUrl(id: string, text = ''): string {
+  const page = `${WORKER_URL}${SHARE_PAGE_PATH}/${id}`
+  const caption = text.trim()
+  return caption ? `${page}?text=${encodeURIComponent(caption)}` : page
+}
 // Что отдаёт временное хранилище: ссылку на файл и его идентификатор. Идентификатор нужен
 // «Поделиться»: по нему Worker готовит сообщение с этим же файлом.
 export interface UploadedReport {
@@ -68,8 +79,17 @@ export interface UploadedReport {
 
 // Загрузка файла в временное хранилище. Возвращает ссылку, по которой файл скачают, и
 // идентификатор — по нему готовится сообщение для «Поделиться».
-// Ошибки — с понятным текстом: экран статистики показывает его как есть.
-export async function uploadReportFile(blob: Blob, fileName: string): Promise<UploadedReport> {
+//
+// Тип файла едет заголовком: по нему Worker понимает, что отдаёт, и таким же типом
+// подписывает файл для системного меню. Не задан — значит выгружается таблица отчёта: так
+// экран статистики не знает о других документах, а прайс-лист и чек передают PDF.
+//
+// Ошибки — с понятным текстом: экран показывает его как есть.
+export async function uploadReportFile(
+  blob: Blob,
+  fileName: string,
+  type: string = REPORT_XLSX_TYPE,
+): Promise<UploadedReport> {
   if (blob.size > MAX_REPORT_BYTES) {
     throw new Error('Отчёт слишком большой для отправки — выберите период покороче')
   }
@@ -79,7 +99,7 @@ export async function uploadReportFile(blob: Blob, fileName: string): Promise<Up
     response = await fetch(reportFilesUrl(), {
       method: 'POST',
       headers: {
-        'Content-Type': REPORT_XLSX_TYPE,
+        'Content-Type': type,
         // Заголовки передаются только латиницей, поэтому имя в percent-encoding —
         // Worker возвращает его в имени файла как есть.
         [FILE_NAME_HEADER]: encodeURIComponent(fileName),
@@ -161,11 +181,22 @@ async function prepareReportShare(
 // остаётся прежний путь чека: выбор чата открывается ссылкой `t.me/share/url`, только уходит
 // ссылка, а не файл.
 //
+// Путь не первый: выгрузка сначала открывает страницу «Поделиться» в браузере телефона
+// (основной путь, см. `reportFileBridge`), а сюда дело доходит только тогда, когда браузер
+// открыть не удалось. Поэтому первая строка адреса не изменилась.
+//
 // Ошибки загрузки бросаются наверх — экран показывает их текстом, как и у выгрузки. Отказ
 // отправки — это исход, а не ошибка: его объясняет подпись под кнопкой.
 async function shareReportWithTelegram(input: ReportFileInput): Promise<ReportShareResult> {
-  const uploaded = await uploadReportFile(input.blob, input.fileName)
+  return sharePreparedReport(input, await uploadReportFile(input.blob, input.fileName))
+}
 
+// Отправка уже загруженного файла: загрузка одна, а путей два — страница «Поделиться» и
+// родное меню чата, поэтому файл передаётся сюда готовым.
+async function sharePreparedReport(
+  input: ReportFileInput,
+  uploaded: UploadedReport,
+): Promise<ReportShareResult> {
   // Отказ подготовки (например, Telegram не принял сообщение) — не сбой: уходим на ссылку.
   const prepared = await prepareReportShare(uploaded.id, input.message).catch(() => null)
 
@@ -186,24 +217,39 @@ async function shareReportWithTelegram(input: ReportFileInput): Promise<ReportSh
   return { kind: prepared ? 'failed' : 'unavailable' }
 }
 
-// Мост отчёта: файл → ссылка → скачивание средствами клиента. Совпадает по
-// интерфейсу с `ReportFileBridge`, поэтому общий код выгрузки про Telegram не знает.
+// Мост отчёта: файл → временная ссылка → страница «Поделиться» в браузере телефона.
+// Совпадает по интерфейсу с `ReportFileBridge`, поэтому общий код выгрузки про Telegram не
+// знает: и статистика, и прайс-лист, и чек вызывают одно действие и получают один исход.
 export const reportFileBridge: ReportFileBridge = {
-  async send({ blob, fileName, message }): Promise<ReportBridgeResult> {
-    const { url } = await uploadReportFile(blob, fileName)
+  async send(input): Promise<ReportBridgeResult> {
+    const { blob, fileName, message, type } = input
+    const uploaded = await uploadReportFile(blob, fileName, type)
 
-    // 1. Клиент скачивает файл сам (Bot API 8.0+): файл появляется в «Загрузках».
-    if (downloadTelegramFile(url, fileName)) return { kind: 'opened', url }
+    // 1. Основной путь: страница «Поделиться» в браузере телефона. Системное меню открывает
+    //    она сама (`navigator.share` с файлом), а файл ей отдаёт тот же Worker — поэтому
+    //    выгрузка совпадает с Android-сборкой (см. worker/src/sharePage.ts).
+    if (openExternalLink(reportSharePageUrl(uploaded.id, message)) !== 'failed') {
+      return { kind: 'page', url: uploaded.url }
+    }
 
-    // 2. Клиент открывает ссылку в своём браузере: файл скачает браузер.
-    if (openExternalLink(url) !== 'failed') return { kind: 'opened', url }
+    // 2. Браузер открыть не вышло: файл уходит документом в выбранный чат Telegram — родное
+    //    меню клиента, которое раньше открывала вторая кнопка на экране.
+    const share = await sharePreparedReport(input, uploaded)
+    if (share.kind === 'sent' || share.kind === 'link') {
+      return { kind: 'opened', url: uploaded.url }
+    }
+    if (share.kind === 'cancelled') return { kind: 'cancelled', url: uploaded.url }
 
-    // 3. Ничего не вышло: ссылка в буфер обмена — её можно открыть вручную.
-    const copied = await copyTextToClipboard(`${message}\n${url}`)
-    return { kind: copied ? 'copied' : 'failed', url }
+    // 3. Клиент скачивает файл сам (Bot API 8.0+): файл появляется в «Загрузках».
+    if (downloadTelegramFile(uploaded.url, fileName)) return { kind: 'opened', url: uploaded.url }
+
+    // 4. Ничего не вышло: ссылка в буфер обмена — её можно открыть вручную.
+    const copied = await copyTextToClipboard(`${message}\n${uploaded.url}`)
+    return { kind: copied ? 'copied' : 'failed', url: uploaded.url }
   },
   // «Поделиться» есть только в этом мосте: в браузере и Android-сборке системное меню
-  // открывается уже при выгрузке, поэтому там второй кнопки не нужно.
+  // открывается уже при выгрузке, поэтому там второй кнопки не нужно. Здесь этим путём
+  // пользуется запасной шаг выгрузки — когда браузер телефона открыть не удалось.
   share: shareReportWithTelegram,
 }
 
